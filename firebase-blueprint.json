@@ -1,0 +1,273 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public profile record for a signed-in trainee",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "role": {
+          "type": "string",
+          "enum": ["trainee"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII record containing user email",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "email", "updatedAt"]
+    },
+    "TrainingAttempt": {
+      "title": "TrainingAttempt",
+      "description": "Completed chat roleplay evaluation result for a user",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "scenarioId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "scenarioTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "messageCount": {
+          "type": "integer"
+        },
+        "overallScore": {
+          "type": "integer"
+        },
+        "gradeLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "summaryVerdict": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "dimensions": {
+          "type": "array",
+          "description": "Bounded list of up to 5 competency score maps"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "scenarioId",
+        "scenarioTitle",
+        "messageCount",
+        "overallScore",
+        "gradeLabel",
+        "summaryVerdict",
+        "dimensions",
+        "createdAt"
+      ]
+    },
+    "QuizRecord": {
+      "title": "QuizRecord",
+      "description": "Best SOP quiz score for a trainee",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bestScore": {
+          "type": "integer"
+        },
+        "totalQuestions": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "bestScore", "totalQuestions", "updatedAt"]
+    },
+    "ChatSession": {
+      "title": "ChatSession",
+      "description": "Active or evaluated multi-turn chat training session",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "scenarioId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "currentStage": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "evaluated"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "scenarioId", "title", "currentStage", "status", "createdAt", "updatedAt"]
+    },
+    "SessionMessage": {
+      "title": "SessionMessage",
+      "description": "Individual message turn inside a training chat session",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["customer", "admin", "mentor"]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "attachmentLabel": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "timestampLabel": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "sessionId", "userId", "role", "text", "timestampLabel", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Non-PII trainee profile document"
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Isolated PII document containing email"
+    },
+    "/users/{userId}/attempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/TrainingAttempt" },
+      "description": "Saved chat evaluation records per user"
+    },
+    "/users/{userId}/quiz/{docId}": {
+      "schema": { "$ref": "#/entities/QuizRecord" },
+      "description": "Saved SOP quiz best score per user"
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/ChatSession" },
+      "description": "Multi-turn chat training session header"
+    },
+    "/users/{userId}/sessions/{sessionId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/SessionMessage" },
+      "description": "Messages belonging to a training chat session"
+    },
+    "/users/{userId}/mentorMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/SessionMessage" },
+      "description": "Multi-turn AI Mentor Q&A chat history per user"
+    }
+  }
+}

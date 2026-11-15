@@ -1,0 +1,6 @@
+{
+  "name": "ChatCraft — ฝึกตอบแชทงานบริการ",
+  "description": "แอปจำลองการโต้ตอบแชทกับลูกค้าและประเมินทักษะการสื่อสารงานบริการ อ้างอิงคู่มือการขายและการปฏิบัติงาน",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

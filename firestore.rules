@@ -1,0 +1,222 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Validation Helpers
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'role', 'createdAt', 'updatedAt'])
+        && data.uid == userId
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 512))
+        && data.role == 'trainee'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPrivateInfo(data, userId) {
+      return data.keys().hasAll(['userId', 'email', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'email', 'updatedAt'])
+        && data.userId == userId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAttempt(data, userId, attemptId) {
+      return data.keys().hasAll([
+          'id', 'userId', 'scenarioId', 'scenarioTitle',
+          'messageCount', 'overallScore', 'gradeLabel',
+          'summaryVerdict', 'dimensions', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'scenarioId', 'scenarioTitle',
+          'messageCount', 'overallScore', 'gradeLabel',
+          'summaryVerdict', 'dimensions', 'createdAt'
+        ])
+        && data.id == attemptId
+        && data.userId == userId
+        && data.scenarioId is string && data.scenarioId.size() >= 1 && data.scenarioId.size() <= 64
+        && data.scenarioTitle is string && data.scenarioTitle.size() >= 1 && data.scenarioTitle.size() <= 200
+        && data.messageCount is int && data.messageCount >= 1 && data.messageCount <= 500
+        && data.overallScore is int && data.overallScore >= 0 && data.overallScore <= 100
+        && data.gradeLabel is string && data.gradeLabel.size() >= 1 && data.gradeLabel.size() <= 120
+        && data.summaryVerdict is string && data.summaryVerdict.size() >= 1 && data.summaryVerdict.size() <= 2000
+        && data.dimensions is list && data.dimensions.size() >= 1 && data.dimensions.size() <= 5
+        && data.dimensions[0] is map
+        && data.createdAt == request.time;
+    }
+
+    function isValidQuizRecord(data, userId) {
+      return data.keys().hasAll(['userId', 'bestScore', 'totalQuestions', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'bestScore', 'totalQuestions', 'updatedAt'])
+        && data.userId == userId
+        && data.bestScore is int && data.bestScore >= 0 && data.bestScore <= 100
+        && data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 100
+        && data.updatedAt == request.time;
+    }
+
+    function isValidSession(data, userId, sessionId) {
+      return data.keys().hasAll(['id', 'userId', 'scenarioId', 'title', 'currentStage', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'scenarioId', 'title', 'currentStage', 'status', 'createdAt', 'updatedAt'])
+        && data.id == sessionId
+        && data.userId == userId
+        && data.scenarioId is string && data.scenarioId.size() >= 1 && data.scenarioId.size() <= 64
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.currentStage is int && data.currentStage >= 1 && data.currentStage <= 6
+        && (data.status == 'active' || data.status == 'evaluated')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMessage(data, userId, sessionId, messageId) {
+      return data.keys().hasAll(['id', 'sessionId', 'userId', 'role', 'text', 'timestampLabel', 'createdAt'])
+        && data.keys().hasOnly(['id', 'sessionId', 'userId', 'role', 'text', 'attachmentLabel', 'timestampLabel', 'createdAt'])
+        && data.id == messageId
+        && data.sessionId == sessionId
+        && data.userId == userId
+        && (data.role == 'customer' || data.role == 'admin' || data.role == 'mentor')
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 4000
+        && (!('attachmentLabel' in data) || (data.attachmentLabel is string && data.attachmentLabel.size() <= 200))
+        && data.timestampLabel is string && data.timestampLabel.size() >= 1 && data.timestampLabel.size() <= 32
+        && data.createdAt == request.time;
+    }
+
+    // Health connection check document (read-only)
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // User Profiles (non-PII)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == existing().createdAt
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']);
+
+      // Isolated PII
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+        allow create: if isValidId(userId)
+          && isValidId(docId)
+          && docId == 'info'
+          && isOwner(userId)
+          && isValidPrivateInfo(incoming(), userId)
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(docId)
+          && docId == 'info'
+          && isOwner(userId)
+          && isValidPrivateInfo(incoming(), userId)
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+      }
+
+      // Saved Chat Evaluation Attempts
+      match /attempts/{attemptId} {
+        allow get: if isValidId(userId) && isValidId(attemptId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(attemptId)
+          && isOwner(userId)
+          && isValidAttempt(incoming(), userId, attemptId);
+        allow delete: if isValidId(userId) && isValidId(attemptId) && isOwner(userId);
+      }
+
+      // Quiz Best Score
+      match /quiz/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+        allow create: if isValidId(userId)
+          && docId == 'summary'
+          && isOwner(userId)
+          && isValidQuizRecord(incoming(), userId);
+        allow update: if isValidId(userId)
+          && docId == 'summary'
+          && isOwner(userId)
+          && isValidQuizRecord(incoming(), userId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['bestScore', 'totalQuestions', 'updatedAt']);
+        allow delete: if isValidId(userId) && docId == 'summary' && isOwner(userId);
+      }
+
+      // Multi-Turn Chat Sessions & Subcollection Messages
+      match /sessions/{sessionId} {
+        allow get: if isValidId(userId) && isValidId(sessionId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(sessionId)
+          && isOwner(userId)
+          && isValidSession(incoming(), userId, sessionId)
+          && incoming().status == 'active'
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(sessionId)
+          && isOwner(userId)
+          && existing().status == 'active'
+          && isValidSession(incoming(), userId, sessionId)
+          && incoming().createdAt == existing().createdAt
+          && incoming().userId == existing().userId
+          && incoming().id == existing().id
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['currentStage', 'status', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(sessionId) && isOwner(userId);
+
+        match /messages/{messageId} {
+          allow get: if isValidId(userId)
+            && isValidId(sessionId)
+            && isValidId(messageId)
+            && isOwner(userId)
+            && exists(/databases/$(database)/documents/users/$(userId)/sessions/$(sessionId));
+          allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+          allow create: if isValidId(userId)
+            && isValidId(sessionId)
+            && isValidId(messageId)
+            && isOwner(userId)
+            && get(/databases/$(database)/documents/users/$(userId)/sessions/$(sessionId)).data.userId == userId
+            && get(/databases/$(database)/documents/users/$(userId)/sessions/$(sessionId)).data.status == 'active'
+            && isValidMessage(incoming(), userId, sessionId, messageId);
+        }
+      }
+
+      // Multi-Turn AI Mentor Chat History
+      match /mentorMessages/{messageId} {
+        allow get: if isValidId(userId) && isValidId(messageId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(messageId)
+          && isOwner(userId)
+          && isValidMessage(incoming(), userId, 'mentor', messageId);
+        allow delete: if isValidId(userId) && isValidId(messageId) && isOwner(userId);
+      }
+    }
+  }
+}
