@@ -16,6 +16,9 @@ import {
   Loader2,
   MapPin,
   ExternalLink,
+  MessageSquareText,
+  ChevronDown,
+  X,
 } from 'lucide-react';
 import {
   TRAINING_SCENARIOS,
@@ -101,7 +104,35 @@ export function SimulatorView({
     places: Array<{ title: string; uri: string }>;
   } | null>(null);
 
+  const [isScriptPickerOpen, setIsScriptPickerOpen] = useState(false);
+  const [quickScriptQuery, setQuickScriptQuery] = useState('');
+
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const scriptPickerRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!isScriptPickerOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        scriptPickerRef.current &&
+        !scriptPickerRef.current.contains(event.target as Node)
+      ) {
+        setIsScriptPickerOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsScriptPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isScriptPickerOpen]);
 
   const resetConversation = (target: TrainingScenario) => {
     const nextSessId = `sess_${Date.now()}`;
@@ -321,9 +352,20 @@ export function SimulatorView({
     setInputText(template);
   };
 
+  const insertChatScript = (text: string) => {
+    setInputText(text);
+    setIsScriptPickerOpen(false);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  };
+
   const copyOrUseText = (id: string, text: string, putInInput = false) => {
     if (putInInput) {
       setInputText(text);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
     } else if (navigator.clipboard) {
       navigator.clipboard.writeText(text).catch(() => {});
     }
@@ -563,11 +605,14 @@ export function SimulatorView({
           {/* Composer */}
           <div className="p-3.5 bg-white border-t border-slate-200 space-y-2.5">
             {/* Quick Toolbar */}
-            <div className="flex flex-wrap items-center gap-2">
+            <div
+              ref={scriptPickerRef}
+              className="relative flex flex-wrap items-center gap-2"
+            >
               <button
                 type="button"
                 onClick={() => setAttachPhotoSet((v) => !v)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors cursor-pointer whitespace-nowrap ${
                   attachPhotoSet
                     ? 'bg-emerald-50 border-emerald-600 text-emerald-800'
                     : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
@@ -580,7 +625,7 @@ export function SimulatorView({
               <button
                 type="button"
                 onClick={insertSummaryTemplate}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap"
               >
                 <FileText className="w-3.5 h-3.5" />
                 แทรกเทมเพลตสรุปยอด
@@ -588,9 +633,46 @@ export function SimulatorView({
 
               <button
                 type="button"
+                onClick={() => insertChatScript(CHAT_SCRIPTS[0].text)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <MessageSquareText className="w-3.5 h-3.5" />
+                สคริปต์ทักทาย
+              </button>
+
+              <button
+                type="button"
+                onClick={() => insertChatScript(CHAT_SCRIPTS[4].text)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <MessageSquareText className="w-3.5 h-3.5" />
+                ขอข้อมูลจัดส่ง
+              </button>
+
+              <button
+                type="button"
+                aria-expanded={isScriptPickerOpen}
+                onClick={() => setIsScriptPickerOpen((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors cursor-pointer whitespace-nowrap ${
+                  isScriptPickerOpen
+                    ? 'bg-emerald-50 border-emerald-600 text-emerald-800'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>สคริปต์แชท</span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform ${
+                    isScriptPickerOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              <button
+                type="button"
                 onClick={handleRequestHint}
                 disabled={isRequestingHint || isSending}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors cursor-pointer disabled:opacity-60 ml-auto"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors cursor-pointer disabled:opacity-60 ml-auto whitespace-nowrap"
               >
                 {isRequestingHint ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -599,11 +681,114 @@ export function SimulatorView({
                 )}
                 ขอคำใบ้ก่อนตอบ
               </button>
+
+              {isScriptPickerOpen && (
+                <div
+                  role="dialog"
+                  aria-label="เลือกสคริปต์แชท"
+                  className="absolute bottom-full left-0 mb-2 w-full sm:w-[480px] bg-white border border-slate-200 rounded-xl shadow-lg z-20 flex flex-col max-h-[340px] overflow-hidden"
+                >
+                  <div className="px-3.5 py-2.5 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+                    <div className="text-xs font-bold text-slate-900">
+                      คลิกเพื่อใส่สคริปต์แชทในกล่องข้อความ
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsScriptPickerOpen(false)}
+                      aria-label="ปิดรายการสคริปต์แชท"
+                      className="p-1 text-slate-500 hover:text-slate-800 rounded-md cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="px-3.5 py-2 border-b border-slate-100">
+                    <input
+                      type="search"
+                      value={quickScriptQuery}
+                      onChange={(e) => setQuickScriptQuery(e.target.value)}
+                      placeholder="ค้นหาสคริปต์ เช่น ทักทาย, เชอร์รี่, รังนก, OP..."
+                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-emerald-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-2.5 space-y-3">
+                    <div className="space-y-1.5">
+                      <div className="px-1.5 text-[11px] font-semibold text-slate-500">
+                        สคริปต์แชทมาตรฐาน
+                      </div>
+                      {CHAT_SCRIPTS.filter((sc) => {
+                        const q = quickScriptQuery.trim().toLowerCase();
+                        if (!q) return true;
+                        return (
+                          sc.title.toLowerCase().includes(q) ||
+                          sc.category.toLowerCase().includes(q) ||
+                          sc.text.toLowerCase().includes(q)
+                        );
+                      }).map((sc, idx) => (
+                        <button
+                          key={`quick-sc-${idx}`}
+                          type="button"
+                          onClick={() => insertChatScript(sc.text)}
+                          className="w-full text-left p-2.5 rounded-lg border border-slate-200 hover:border-emerald-600 hover:bg-emerald-50/40 transition-colors cursor-pointer space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold text-slate-900">
+                              {sc.title}
+                            </span>
+                            <span className="text-[11px] text-slate-500 shrink-0">
+                              {sc.category}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                            {sc.text}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                      <div className="px-1.5 text-[11px] font-semibold text-slate-500">
+                        สคริปต์เสนอ Upsell
+                      </div>
+                      {UPSELL_OPTIONS.filter((up) => {
+                        const q = quickScriptQuery.trim().toLowerCase();
+                        if (!q) return true;
+                        return (
+                          up.title.toLowerCase().includes(q) ||
+                          up.bestFor.toLowerCase().includes(q) ||
+                          up.script.toLowerCase().includes(q)
+                        );
+                      }).map((up) => (
+                        <button
+                          key={`quick-up-${up.id}`}
+                          type="button"
+                          onClick={() => insertChatScript(up.script)}
+                          className="w-full text-left p-2.5 rounded-lg border border-slate-200 hover:border-emerald-600 hover:bg-emerald-50/40 transition-colors cursor-pointer space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold text-slate-900">
+                              {up.title}
+                            </span>
+                            <span className="text-[11px] text-emerald-700 shrink-0">
+                              Upsell
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                            {up.script}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Textarea + Send */}
             <div className="flex items-end gap-2.5">
               <textarea
+                ref={textareaRef}
                 rows={2}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
