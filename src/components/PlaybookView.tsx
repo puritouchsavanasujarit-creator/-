@@ -33,12 +33,12 @@ export function PlaybookView() {
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 space-y-10">
       {/* Intro & Search */}
-      <section className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 pb-6">
+      <section className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
             คู่มือการขาย สินค้า และกฎปฏิบัติงาน (Admin Sale Playbook)
           </h1>
-          <p className="text-sm text-slate-600 mt-1">
+          <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
             รวม Flow 6 ขั้นตอน, ราคาเซตกระเช้า, เกณฑ์ค่าจัดส่ง, สคริปต์ Upsell และวิธีส่งต่อออเดอร์ตามกะ
           </p>
         </div>
@@ -48,16 +48,18 @@ export function PlaybookView() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="ค้นหาชื่อเซต ผลไม้ หรือโอกาสใช้งาน..."
-            className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-600 focus:outline-none"
+            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-emerald-600 focus:outline-none"
           />
         </div>
       </section>
 
       {/* 1. Golden Rule + 6-Step Flow */}
       <section className="space-y-4">
-        <div className="p-5 rounded-2xl bg-emerald-50/70 border border-emerald-200">
-          <div className="text-xs font-semibold text-emerald-800">กฎเหล็กของการแชท</div>
-          <p className="text-base font-bold text-slate-900 mt-1">
+        <div className="p-5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/70">
+          <div className="text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+            กฎเหล็กของการแชท
+          </div>
+          <p className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">
             “ทุกขั้นตอนของการคุยกับลูกค้า ต้องทิ้งคำถามไว้ให้ลูกค้าตอบเสมอ เพื่อรักษาบทสนทนาไว้”
           </p>
         </div>
@@ -66,13 +68,15 @@ export function PlaybookView() {
           {SALES_STAGES.map((stage) => (
             <div
               key={stage.key}
-              className="p-4 rounded-xl bg-white border border-slate-200 space-y-1.5"
+              className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1.5"
             >
-              <div className="text-xs font-semibold text-emerald-700 font-mono-num">
+              <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 font-mono-num">
                 ขั้นตอนที่ {stage.step}
               </div>
-              <h2 className="text-sm font-bold text-slate-900">{stage.label}</h2>
-              <p className="text-xs text-slate-600 leading-relaxed">{stage.shortDesc}</p>
+              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">{stage.label}</h2>
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                {stage.shortDesc}
+              </p>
             </div>
           ))}
         </div>
@@ -81,8 +85,10 @@ export function PlaybookView() {
       {/* 2. Product Catalog */}
       <section className="space-y-4">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-bold text-slate-900">รายการเซตผลไม้พรีเมียมและส่วนประกอบ</h2>
-          <span className="text-xs text-slate-500 font-mono-num">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+            รายการเซตผลไม้พรีเมียมและส่วนประกอบ
+          </h2>
+          <span className="text-xs text-slate-500 dark:text-slate-400 font-mono-num">
             {filteredProducts.length} รายการ
           </span>
         </div>
@@ -91,9 +97,9 @@ export function PlaybookView() {
           {filteredProducts.map((prod) => (
             <article
               key={prod.id}
-              className="bg-white border border-slate-200 rounded-2xl overflow-hidden flex flex-col sm:flex-row"
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden flex flex-col sm:flex-row"
             >
-              <div className="sm:w-44 h-44 sm:h-auto shrink-0 bg-slate-100 relative">
+              <div className="sm:w-44 h-44 sm:h-auto shrink-0 bg-slate-100 dark:bg-slate-800 relative">
                 {prod.imageKey ? (
                   <img
                     src={PRODUCT_IMAGE_MAP[prod.imageKey]}
@@ -102,7 +108,7 @@ export function PlaybookView() {
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <div className="w-full h-full bg-gradient-to-br from-emerald-50 to-slate-100 flex items-center justify-center p-4 text-center text-xs font-semibold text-slate-600">
+                  <div className="w-full h-full bg-gradient-to-br from-emerald-50 to-slate-100 dark:from-emerald-950/50 dark:to-slate-900 flex items-center justify-center p-4 text-center text-xs font-semibold text-slate-600 dark:text-slate-300">
                     {prod.code}
                   </div>
                 )}
@@ -112,33 +118,37 @@ export function PlaybookView() {
                 <div>
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <div className="text-xs text-slate-500 font-mono-num">{prod.code}</div>
-                      <h3 className="text-base font-bold text-slate-900">{prod.name}</h3>
+                      <div className="text-xs text-slate-500 dark:text-slate-400 font-mono-num">
+                        {prod.code}
+                      </div>
+                      <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                        {prod.name}
+                      </h3>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="text-base font-bold font-mono-num text-emerald-700">
+                      <div className="text-base font-bold font-mono-num text-emerald-700 dark:text-emerald-400">
                         {prod.price.toLocaleString()} บ.
                       </div>
                       {prod.originalPrice && (
-                        <div className="text-xs font-mono-num text-slate-400 line-through">
+                        <div className="text-xs font-mono-num text-slate-400 dark:text-slate-500 line-through">
                           {prod.originalPrice.toLocaleString()} บ.
                         </div>
                       )}
                     </div>
                   </div>
 
-                  <div className="text-xs text-slate-500 mt-1">
+                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                     {prod.boxColor} · เหมาะสำหรับ: {prod.occasions.join(', ')}
                   </div>
 
-                  <p className="text-xs text-slate-700 mt-2 leading-relaxed">
+                  <p className="text-xs text-slate-700 dark:text-slate-300 mt-2 leading-relaxed">
                     {prod.fruits.join(' · ')}
                   </p>
                 </div>
 
                 {prod.hasSeasonalRisk && prod.seasonalNote && (
-                  <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/70 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                     <span>{prod.seasonalNote}</span>
                   </div>
                 )}
@@ -150,25 +160,27 @@ export function PlaybookView() {
 
       {/* 3. Individual Fruit Pricing + Shipping Matrix */}
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
-          <h2 className="text-base font-bold text-slate-900">ตารางราคาผลไม้ปลีก (สำหรับปรับ/ทดแทน)</h2>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3">
+          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+            ตารางราคาผลไม้ปลีก (สำหรับปรับ/ทดแทน)
+          </h2>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-slate-200 text-slate-500">
+                <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
                   <th className="py-2 font-semibold">ผลไม้</th>
                   <th className="py-2 font-semibold">หน่วย</th>
                   <th className="py-2 font-semibold">แหล่งที่มา</th>
                   <th className="py-2 font-semibold text-right">ราคา (บาท)</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {INDIVIDUAL_FRUITS.map((f) => (
                   <tr key={f.name}>
-                    <td className="py-2.5 font-medium text-slate-900">{f.name}</td>
-                    <td className="py-2.5 text-slate-600">{f.unit}</td>
-                    <td className="py-2.5 text-slate-500">{f.origin}</td>
-                    <td className="py-2.5 font-mono-num font-semibold text-slate-900 text-right">
+                    <td className="py-2.5 font-medium text-slate-900 dark:text-slate-100">{f.name}</td>
+                    <td className="py-2.5 text-slate-600 dark:text-slate-300">{f.unit}</td>
+                    <td className="py-2.5 text-slate-500 dark:text-slate-400">{f.origin}</td>
+                    <td className="py-2.5 font-mono-num font-semibold text-slate-900 dark:text-slate-100 text-right">
                       {f.price}
                     </td>
                   </tr>
@@ -178,45 +190,61 @@ export function PlaybookView() {
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
-          <h2 className="text-base font-bold text-slate-900">เกณฑ์ค่าจัดส่งและข้อควรระวัง</h2>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+            เกณฑ์ค่าจัดส่งและข้อควรระวัง
+          </h2>
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-slate-200 text-slate-500">
+              <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
                 <th className="py-2 font-semibold">ระยะทาง / ช่องทาง</th>
                 <th className="py-2 font-semibold">ค่าส่ง</th>
                 <th className="py-2 font-semibold">เงื่อนไขส่งฟรี / รอบส่ง</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               <tr>
-                <td className="py-2.5 font-medium text-slate-900">1–10 กม.</td>
-                <td className="py-2.5 font-mono-num font-semibold text-slate-900">59 บ.</td>
-                <td className="py-2.5 text-slate-600">ฟรีเมื่อยอด 1,500+ บ. (ถึงใน 1–1.5 ชม.)</td>
+                <td className="py-2.5 font-medium text-slate-900 dark:text-slate-100">1–10 กม.</td>
+                <td className="py-2.5 font-mono-num font-semibold text-slate-900 dark:text-slate-100">
+                  59 บ.
+                </td>
+                <td className="py-2.5 text-slate-600 dark:text-slate-300">
+                  ฟรีเมื่อยอด 1,500+ บ. (ถึงใน 1–1.5 ชม.)
+                </td>
               </tr>
               <tr>
-                <td className="py-2.5 font-medium text-slate-900">11–25 กม.</td>
-                <td className="py-2.5 font-mono-num font-semibold text-slate-900">159 บ.</td>
-                <td className="py-2.5 text-slate-600">ฟรีเมื่อยอด 4,000+ บ. (ถึงใน 2–2.5 ชม.)</td>
+                <td className="py-2.5 font-medium text-slate-900 dark:text-slate-100">11–25 กม.</td>
+                <td className="py-2.5 font-mono-num font-semibold text-slate-900 dark:text-slate-100">
+                  159 บ.
+                </td>
+                <td className="py-2.5 text-slate-600 dark:text-slate-300">
+                  ฟรีเมื่อยอด 4,000+ บ. (ถึงใน 2–2.5 ชม.)
+                </td>
               </tr>
               <tr>
-                <td className="py-2.5 font-medium text-slate-900">เกิน 25 กม.</td>
-                <td className="py-2.5 font-mono-num font-semibold text-slate-900">
+                <td className="py-2.5 font-medium text-slate-900 dark:text-slate-100">เกิน 25 กม.</td>
+                <td className="py-2.5 font-mono-num font-semibold text-slate-900 dark:text-slate-100">
                   159 + 10/กม.
                 </td>
-                <td className="py-2.5 text-slate-600">บวกเพิ่มกม.ละ 10 บ. (ถึงใน 3 ชม.)</td>
+                <td className="py-2.5 text-slate-600 dark:text-slate-300">
+                  บวกเพิ่มกม.ละ 10 บ. (ถึงใน 3 ชม.)
+                </td>
               </tr>
               <tr>
-                <td className="py-2.5 font-medium text-slate-900">ต่างจังหวัด Inter Express</td>
-                <td className="py-2.5 font-mono-num font-semibold text-slate-900">450 บ./ชิ้น</td>
-                <td className="py-2.5 text-slate-600">
+                <td className="py-2.5 font-medium text-slate-900 dark:text-slate-100">
+                  ต่างจังหวัด Inter Express
+                </td>
+                <td className="py-2.5 font-mono-num font-semibold text-slate-900 dark:text-slate-100">
+                  450 บ./ชิ้น
+                </td>
+                <td className="py-2.5 text-slate-600 dark:text-slate-300">
                   รถห้องเย็น นับถอยหลัง 3 วัน ตัดรอบก่อน 12.00 น. งดวิ่งวันเสาร์
                 </td>
               </tr>
             </tbody>
           </table>
 
-          <ul className="space-y-1.5 text-xs text-slate-600 list-disc pl-4 pt-2 border-t border-slate-200">
+          <ul className="space-y-1.5 text-xs text-slate-600 dark:text-slate-300 list-disc pl-4 pt-2 border-t border-slate-200 dark:border-slate-800">
             <li>เคสด่วนน้อยกว่า 2 ชม. หรือชุดส่งด่วน 1–1.5 ชม.: ประสานทีม OP ก่อนรับปากทุกครั้ง</li>
             <li>ส่งโรงพยาบาล: ต้องขอเบอร์ติดต่อญาติผู้ป่วยเสมอ</li>
             <li>ส่ง URL Payment: ห้ามเว้นวรรคและห้ามใส่อีโมจิในลิงก์</li>
@@ -227,13 +255,20 @@ export function PlaybookView() {
 
       {/* 4. Shift Workflows */}
       <section className="space-y-3">
-        <h2 className="text-lg font-bold text-slate-900">ขั้นตอนรับและส่งต่อออเดอร์ตามช่วงเวลา (Shift)</h2>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+          ขั้นตอนรับและส่งต่อออเดอร์ตามช่วงเวลา (Shift)
+        </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {SHIFT_WORKFLOWS.map((wf) => (
-            <div key={wf.shift} className="p-4 rounded-xl bg-white border border-slate-200 space-y-2">
-              <div className="text-xs font-semibold text-emerald-700">{wf.shift}</div>
-              <div className="text-sm font-bold text-slate-900">{wf.label}</div>
-              <ul className="space-y-1.5 text-xs text-slate-600 list-disc pl-4 leading-relaxed">
+            <div
+              key={wf.shift}
+              className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-2"
+            >
+              <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                {wf.shift}
+              </div>
+              <div className="text-sm font-bold text-slate-900 dark:text-slate-100">{wf.label}</div>
+              <ul className="space-y-1.5 text-xs text-slate-600 dark:text-slate-300 list-disc pl-4 leading-relaxed">
                 {wf.steps.map((s, idx) => (
                   <li key={idx}>{s}</li>
                 ))}
@@ -245,43 +280,51 @@ export function PlaybookView() {
 
       {/* 5. Upsell & Chat Scripts */}
       <section className="space-y-3">
-        <h2 className="text-lg font-bold text-slate-900">คลังสคริปต์ Upsell และสคริปต์แชท</h2>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+          คลังสคริปต์ Upsell และสคริปต์แชท
+        </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {UPSELL_OPTIONS.map((up) => (
-            <div key={up.id} className="p-4 rounded-xl bg-white border border-slate-200 space-y-2">
+            <div
+              key={up.id}
+              className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-2"
+            >
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900">{up.title}</h3>
-                  <div className="text-xs text-slate-500">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">{up.title}</h3>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
                     {up.priceText} · {up.bestFor}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => handleCopy(up.id, up.script)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 shrink-0 cursor-pointer"
                 >
                   {copiedId === up.id ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   {copiedId === up.id ? 'คัดลอกแล้ว' : 'คัดลอก'}
                 </button>
               </div>
-              <p className="text-xs text-slate-700 bg-slate-50 p-3 rounded-lg leading-relaxed">
+              <p className="text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/70 p-3 rounded-lg leading-relaxed">
                 {up.script}
               </p>
             </div>
           ))}
 
           {CHAT_SCRIPTS.map((sc, i) => (
-            <div key={i} className="p-4 rounded-xl bg-white border border-slate-200 space-y-2">
+            <div
+              key={i}
+              className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-2"
+            >
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <div className="text-xs text-slate-500">{sc.category}</div>
-                  <h3 className="text-sm font-bold text-slate-900">{sc.title}</h3>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">{sc.category}</div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">{sc.title}</h3>
                 </div>
                 <button
                   type="button"
                   onClick={() => handleCopy(`cs-${i}`, sc.text)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 shrink-0 cursor-pointer"
                 >
                   {copiedId === `cs-${i}` ? (
                     <Check className="w-3.5 h-3.5" />
@@ -291,7 +334,7 @@ export function PlaybookView() {
                   {copiedId === `cs-${i}` ? 'คัดลอกแล้ว' : 'คัดลอก'}
                 </button>
               </div>
-              <p className="text-xs text-slate-700 bg-slate-50 p-3 rounded-lg leading-relaxed whitespace-pre-line">
+              <p className="text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/70 p-3 rounded-lg leading-relaxed whitespace-pre-line">
                 {sc.text}
               </p>
             </div>

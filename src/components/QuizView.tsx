@@ -45,12 +45,12 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
   return (
     <div className="max-w-[1000px] mx-auto px-4 sm:px-6 py-8 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 pb-5">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
             แบบทดสอบความรู้คู่มือการขายและปฏิบัติงาน
           </h1>
-          <p className="text-sm text-slate-600 mt-1">
+          <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
             ตรวจสอบความเข้าใจกฎการแชท การคำนวณค่าส่ง การเสนอ Upsell และขั้นตอนส่งต่อ OP ทั้งหมด{' '}
             {QUIZ_QUESTIONS.length} ข้อ
           </p>
@@ -58,16 +58,16 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
 
         <div className="flex items-center gap-3 shrink-0">
           <div className="text-right">
-            <div className="text-xs text-slate-500">ตอบแล้ว / ถูกต้อง</div>
-            <div className="text-lg font-bold font-mono-num text-slate-900">
+            <div className="text-xs text-slate-500 dark:text-slate-400">ตอบแล้ว / ถูกต้อง</div>
+            <div className="text-lg font-bold font-mono-num text-slate-900 dark:text-slate-100">
               {answeredCount}/{QUIZ_QUESTIONS.length}
-              <span className="text-emerald-700 ml-2">({correctCount} ถูก)</span>
+              <span className="text-emerald-700 dark:text-emerald-400 ml-2">({correctCount} ถูก)</span>
             </div>
           </div>
           <button
             type="button"
             onClick={handleReset}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             ทำใหม่
@@ -77,12 +77,14 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
 
       {/* Filter Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl">
+        <div className="inline-flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-xl">
           <button
             type="button"
             onClick={() => setFilter('all')}
             className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-              filter === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+              filter === 'all'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
             ทั้งหมด ({QUIZ_QUESTIONS.length})
@@ -91,7 +93,9 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
             type="button"
             onClick={() => setFilter('unanswered')}
             className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-              filter === 'unanswered' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+              filter === 'unanswered'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
             ยังไม่ตอบ ({QUIZ_QUESTIONS.length - answeredCount})
@@ -100,7 +104,9 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
             type="button"
             onClick={() => setFilter('wrong')}
             className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-              filter === 'wrong' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+              filter === 'wrong'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
             ข้อที่ตอบผิด ({answeredCount - correctCount})
@@ -111,20 +117,20 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
           type="button"
           onClick={handleSubmitQuiz}
           disabled={answeredCount === 0}
-          className="px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 rounded-lg transition-colors cursor-pointer"
+          className="px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 rounded-lg transition-colors cursor-pointer"
         >
           บันทึกคะแนนรอบนี้
         </button>
       </div>
 
       {submitted && (
-        <div className="p-5 rounded-2xl bg-white border border-emerald-600 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-600 dark:border-emerald-500 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="text-sm font-bold text-slate-900">
+            <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
               บันทึกผลทดสอบแล้ว: ได้คะแนน {correctCount} จาก {QUIZ_QUESTIONS.length} ข้อ (
               {Math.round((correctCount / QUIZ_QUESTIONS.length) * 100)}%)
             </div>
-            <p className="text-xs text-slate-600 mt-1">
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
               {correctCount >= 16
                 ? 'ยอดเยี่ยม! คุณแม่นยำกฎ SOP และพร้อมรับมือแชทลูกค้าจริงแล้ว'
                 : 'แนะนำให้ทบทวนข้อที่ตอบผิดและเปิดคู่มือประกอบในห้องจำลองแชท'}
@@ -133,7 +139,7 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
           <button
             type="button"
             onClick={() => setFilter('wrong')}
-            className="px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 shrink-0 cursor-pointer"
+            className="px-3.5 py-2 text-xs font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/60 shrink-0 cursor-pointer"
           >
             ทบทวนข้อที่ผิด
           </button>
@@ -142,7 +148,7 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
 
       {/* Question Cards */}
       {visibleQuestions.length === 0 ? (
-        <div className="p-10 text-center bg-white border border-slate-200 rounded-2xl text-sm text-slate-500">
+        <div className="p-10 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm text-slate-500 dark:text-slate-400">
           ไม่มีข้อคำถามในตัวกรองที่เลือก
         </div>
       ) : (
@@ -155,19 +161,23 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
             return (
               <div
                 key={q.id}
-                className="p-5 bg-white border border-slate-200 rounded-2xl space-y-3.5"
+                className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3.5"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-xs font-medium text-slate-500">
+                    <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
                       ข้อที่ {q.id} · {q.category}
                     </div>
-                    <h2 className="text-base font-semibold text-slate-900 mt-1">{q.question}</h2>
+                    <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100 mt-1">
+                      {q.question}
+                    </h2>
                   </div>
                   {isAnswered && (
                     <span
                       className={`inline-flex items-center gap-1 text-xs font-semibold shrink-0 ${
-                        isCorrect ? 'text-emerald-700' : 'text-rose-700'
+                        isCorrect
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-rose-700 dark:text-rose-400'
                       }`}
                     >
                       {isCorrect ? (
@@ -191,14 +201,17 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
                     const isThisCorrect = q.correctIndex === idx;
 
                     let styleClass =
-                      'bg-white border-slate-200 text-slate-800 hover:border-slate-300';
+                      'bg-white dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-700';
                     if (isAnswered) {
                       if (isThisCorrect) {
-                        styleClass = 'bg-emerald-50 border-emerald-600 text-emerald-950 font-medium';
+                        styleClass =
+                          'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-600 dark:border-emerald-500 text-emerald-950 dark:text-emerald-100 font-medium';
                       } else if (isThisChosen) {
-                        styleClass = 'bg-rose-50 border-rose-400 text-rose-900';
+                        styleClass =
+                          'bg-rose-50 dark:bg-rose-950/50 border-rose-400 dark:border-rose-600 text-rose-900 dark:text-rose-200';
                       } else {
-                        styleClass = 'bg-slate-50 border-slate-200 text-slate-500';
+                        styleClass =
+                          'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400';
                       }
                     }
 
@@ -219,8 +232,9 @@ export function QuizView({ onCompleteQuiz }: QuizViewProps) {
                 </div>
 
                 {isAnswered && (
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 leading-relaxed">
-                    <strong className="text-slate-900">คำอธิบายตามคู่มือ:</strong> {q.explanation}
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                    <strong className="text-slate-900 dark:text-slate-100">คำอธิบายตามคู่มือ:</strong>{' '}
+                    {q.explanation}
                   </div>
                 )}
               </div>

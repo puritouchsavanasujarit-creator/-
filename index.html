@@ -21,8 +21,22 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('chatcraft_theme_v1');
+          var isDark =
+            saved === 'dark' ||
+            (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.colorScheme = 'dark';
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
-  <body class="bg-[#F8FAFC] text-[#0F172A] antialiased selection:bg-emerald-100 selection:text-emerald-900">
+  <body class="bg-[#F8FAFC] dark:bg-slate-950 text-[#0F172A] dark:text-slate-100 antialiased selection:bg-emerald-100 dark:selection:bg-emerald-900 selection:text-emerald-900 dark:selection:text-emerald-100">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

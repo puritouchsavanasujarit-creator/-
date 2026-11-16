@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { TRAINING_SCENARIOS } from '@/src/data/playbookData';
 import type { AppTab, SavedAttempt, QuizProgress } from '@/src/types';
 import { FirebaseProvider, useFirebaseAuth } from '@/src/contexts/FirebaseContext';
+import { ThemeProvider } from '@/src/contexts/ThemeContext';
 import {
   clearAllUserProgress,
   saveAttemptDoc,
@@ -134,11 +135,11 @@ function AppShell() {
   const completedScenarioIds = Array.from(new Set(attempts.map((a) => a.scenarioId)));
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-[#0F172A]">
+    <div className="min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-slate-950 text-[#0F172A] dark:text-slate-100 transition-colors">
       <TopBar activeTab={activeTab} onSelectTab={setActiveTab} />
 
       {authReady && !user && (
-        <div className="bg-slate-900 text-white text-xs px-4 py-2">
+        <div className="bg-slate-900 dark:bg-slate-900/95 dark:border-b dark:border-slate-800 text-white text-xs px-4 py-2">
           <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-2">
             <span>
               เข้าสู่ระบบด้วย Google เพื่อบันทึกประวัติการฝึกตอบแชท ผลคะแนน และแชทพี่โค้ช AI บน Cloud อัตโนมัติ
@@ -155,7 +156,7 @@ function AppShell() {
       )}
 
       {authError && (
-        <div className="bg-rose-50 border-b border-rose-200 text-rose-800 text-xs px-4 py-2">
+        <div className="bg-rose-50 dark:bg-rose-950/60 border-b border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs px-4 py-2">
           <div className="max-w-[1400px] mx-auto">{authError}</div>
         </div>
       )}
@@ -190,8 +191,10 @@ function AppShell() {
 
 export default function App() {
   return (
-    <FirebaseProvider>
-      <AppShell />
-    </FirebaseProvider>
+    <ThemeProvider>
+      <FirebaseProvider>
+        <AppShell />
+      </FirebaseProvider>
+    </ThemeProvider>
   );
 }
