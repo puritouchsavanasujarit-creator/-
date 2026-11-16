@@ -19,6 +19,7 @@ import {
   MessageSquareText,
   ChevronDown,
   X,
+  Pencil,
 } from 'lucide-react';
 import {
   TRAINING_SCENARIOS,
@@ -54,6 +55,13 @@ interface SimulatorViewProps {
 
 type CompanionTab = 'coach' | 'shipping' | 'scripts';
 
+const SCRIPT_OVERRIDES_KEY = 'chatcraft_script_overrides_v1';
+
+interface ScriptOverrides {
+  chat: Record<string, string>;
+  upsell: Record<string, string>;
+}
+
 function getCurrentTimeLabel(): string {
   const now = new Date();
   return now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
@@ -87,6 +95,21 @@ export function SimulatorView({
   const [companionTab, setCompanionTab] = useState<CompanionTab>('coach');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [scriptSearch, setScriptSearch] = useState('');
+  const [scriptOverrides, setScriptOverrides] = useState<ScriptOverrides>(() => {
+    try {
+      const raw = localStorage.getItem(SCRIPT_OVERRIDES_KEY);
+      if (!raw) return { chat: {}, upsell: {} };
+      const parsed = JSON.parse(raw) as Partial<ScriptOverrides>;
+      return { chat: parsed.chat ?? {}, upsell: parsed.upsell ?? {} };
+    } catch {
+      return { chat: {}, upsell: {} };
+    }
+  });
+  const [editingScript, setEditingScript] = useState<{
+    kind: 'chat' | 'upsell';
+    key: string;
+  } | null>(null);
+  const [scriptDraft, setScriptDraft] = useState('');
 
   // Shipping calculator state synced with active scenario defaults
   const [calcSubtotal, setCalcSubtotal] = useState<number>(scenario.budgetHint);
@@ -133,6 +156,14 @@ export function SimulatorView({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [isScriptPickerOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SCRIPT_OVERRIDES_KEY, JSON.stringify(scriptOverrides));
+    } catch {
+      // Ignore storage errors
+    }
+  }, [scriptOverrides]);
 
   const resetConversation = (target: TrainingScenario) => {
     const nextSessId = `sess_${Date.now()}`;
@@ -360,6 +391,53 @@ export function SimulatorView({
     });
   };
 
+  const chatScriptText = (index: number) =>
+    scriptOverrides.chat[String(index)] ?? CHAT_SCRIPTS[index].text;
+
+  const upsellScriptText = (id: string) =>
+    scriptOverrides.upsell[id] ?? UPSELL_OPTIONS.find((u) => u.id === id)?.script ?? '';
+
+  const startScriptEdit = (kind: 'chat' | 'upsell', key: string, currentText: string) => {
+    setEditingScript({ kind, key });
+    setScriptDraft(currentText);
+  };
+
+  const saveScriptEdit = () => {
+    if (!editingScript) return;
+    const text = scriptDraft.trim();
+    setScriptOverrides((prev) => {
+      if (editingScript.kind === 'chat') {
+        const defaultValue = CHAT_SCRIPTS[Number(editingScript.key)].text;
+        const nextChat = { ...prev.chat };
+        if (!text || text === defaultValue) delete nextChat[editingScript.key];
+        else nextChat[editingScript.key] = text;
+        return { ...prev, chat: nextChat };
+      }
+      const defaultValue = UPSELL_OPTIONS.find((u) => u.id === editingScript.key)?.script ?? '';
+      const nextUpsell = { ...prev.upsell };
+      if (!text || text === defaultValue) delete nextUpsell[editingScript.key];
+      else nextUpsell[editingScript.key] = text;
+      return { ...prev, upsell: nextUpsell };
+    });
+    setEditingScript(null);
+    setScriptDraft('');
+  };
+
+  const cancelScriptEdit = () => {
+    setEditingScript(null);
+    setScriptDraft('');
+  };
+
+  const resetScriptOverride = (kind: 'chat' | 'upsell', key: string) => {
+    setScriptOverrides((prev) => {
+      const next: ScriptOverrides = { ...prev, [kind]: { ...prev[kind] } };
+      delete next[kind][key];
+      return next;
+    });
+    setEditingScript(null);
+    setScriptDraft('');
+  };
+
   const copyOrUseText = (id: string, text: string, putInInput = false) => {
     if (putInInput) {
       setInputText(text);
@@ -381,12 +459,15 @@ export function SimulatorView({
     isSaturdayDispatch: calcSaturday,
   });
 
-  const filteredScripts = CHAT_SCRIPTS.filter(
-    (s) =>
-      s.title.toLowerCase().includes(scriptSearch.toLowerCase()) ||
-      s.text.toLowerCase().includes(scriptSearch.toLowerCase()) ||
-      s.category.toLowerCase().includes(scriptSearch.toLowerCase())
-  );
+  const filteredScripts = CHAT_SCRIPTS.filter((s, index) => {
+    const q = scriptSearch.toLowerCase();
+    const text = scriptOverrides.chat[String(index)] ?? s.text;
+    return (
+      s.title.toLowerCase().includes(q) ||
+      text.toLowerCase().includes(q) ||
+      s.category.toLowerCase().includes(q)
+    );
+  });
 
   const handleNextScenario = () => {
     const idx = TRAINING_SCENARIOS.findIndex((s) => s.id === scenario.id);
@@ -633,7 +714,7 @@ export function SimulatorView({
 
               <button
                 type="button"
-                onClick={() => insertChatScript(CHAT_SCRIPTS[0].text)}
+                onClick={() => insertChatScript(chatScriptText(0))}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap"
               >
                 <MessageSquareText className="w-3.5 h-3.5" />
@@ -642,7 +723,7 @@ export function SimulatorView({
 
               <button
                 type="button"
-                onClick={() => insertChatScript(CHAT_SCRIPTS[4].text)}
+                onClick={() => insertChatScript(chatScriptText(4))}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap"
               >
                 <MessageSquareText className="w-3.5 h-3.5" />
@@ -720,31 +801,36 @@ export function SimulatorView({
                       {CHAT_SCRIPTS.filter((sc) => {
                         const q = quickScriptQuery.trim().toLowerCase();
                         if (!q) return true;
+                        const text = chatScriptText(CHAT_SCRIPTS.indexOf(sc));
                         return (
                           sc.title.toLowerCase().includes(q) ||
                           sc.category.toLowerCase().includes(q) ||
-                          sc.text.toLowerCase().includes(q)
+                          text.toLowerCase().includes(q)
                         );
-                      }).map((sc, idx) => (
-                        <button
-                          key={`quick-sc-${idx}`}
-                          type="button"
-                          onClick={() => insertChatScript(sc.text)}
-                          className="w-full text-left p-2.5 rounded-lg border border-slate-200 hover:border-emerald-600 hover:bg-emerald-50/40 transition-colors cursor-pointer space-y-1"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-semibold text-slate-900">
-                              {sc.title}
-                            </span>
-                            <span className="text-[11px] text-slate-500 shrink-0">
-                              {sc.category}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                            {sc.text}
-                          </p>
-                        </button>
-                      ))}
+                      }).map((sc) => {
+                        const idx = CHAT_SCRIPTS.indexOf(sc);
+                        const text = chatScriptText(idx);
+                        return (
+                          <button
+                            key={`quick-sc-${idx}`}
+                            type="button"
+                            onClick={() => insertChatScript(text)}
+                            className="w-full text-left p-2.5 rounded-lg border border-slate-200 hover:border-emerald-600 hover:bg-emerald-50/40 transition-colors cursor-pointer space-y-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-slate-900">
+                                {sc.title}
+                              </span>
+                              <span className="text-[11px] text-slate-500 shrink-0">
+                                {sc.category}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                              {text}
+                            </p>
+                          </button>
+                        );
+                      })}
                     </div>
 
                     <div className="space-y-1.5 pt-2 border-t border-slate-100">
@@ -754,31 +840,35 @@ export function SimulatorView({
                       {UPSELL_OPTIONS.filter((up) => {
                         const q = quickScriptQuery.trim().toLowerCase();
                         if (!q) return true;
+                        const text = upsellScriptText(up.id);
                         return (
                           up.title.toLowerCase().includes(q) ||
                           up.bestFor.toLowerCase().includes(q) ||
-                          up.script.toLowerCase().includes(q)
+                          text.toLowerCase().includes(q)
                         );
-                      }).map((up) => (
-                        <button
-                          key={`quick-up-${up.id}`}
-                          type="button"
-                          onClick={() => insertChatScript(up.script)}
-                          className="w-full text-left p-2.5 rounded-lg border border-slate-200 hover:border-emerald-600 hover:bg-emerald-50/40 transition-colors cursor-pointer space-y-1"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-semibold text-slate-900">
-                              {up.title}
-                            </span>
-                            <span className="text-[11px] text-emerald-700 shrink-0">
-                              Upsell
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                            {up.script}
-                          </p>
-                        </button>
-                      ))}
+                      }).map((up) => {
+                        const text = upsellScriptText(up.id);
+                        return (
+                          <button
+                            key={`quick-up-${up.id}`}
+                            type="button"
+                            onClick={() => insertChatScript(text)}
+                            className="w-full text-left p-2.5 rounded-lg border border-slate-200 hover:border-emerald-600 hover:bg-emerald-50/40 transition-colors cursor-pointer space-y-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-slate-900">
+                                {up.title}
+                              </span>
+                              <span className="text-[11px] text-emerald-700 shrink-0">
+                                Upsell
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                              {text}
+                            </p>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -1234,51 +1324,164 @@ export function SimulatorView({
                 {/* Chat Scripts */}
                 <div className="space-y-2.5">
                   <h4 className="text-xs font-bold text-slate-900">สคริปต์แชทมาตรฐาน</h4>
-                  {filteredScripts.map((sc, idx) => (
-                    <div
-                      key={idx}
-                      className="p-3 rounded-xl border border-slate-200 bg-white space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-slate-900">{sc.title}</span>
-                        <button
-                          type="button"
-                          onClick={() => copyOrUseText(`sc-${idx}`, sc.text, true)}
-                          className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 shrink-0 cursor-pointer"
-                        >
-                          ใส่ในแชท
-                        </button>
+                  {filteredScripts.map((sc) => {
+                    const idx = CHAT_SCRIPTS.indexOf(sc);
+                    const key = String(idx);
+                    const isEditing = editingScript?.kind === 'chat' && editingScript.key === key;
+                    const isOverridden = scriptOverrides.chat[key] !== undefined;
+                    return (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-xl border border-slate-200 bg-white space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-slate-900">{sc.title}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => startScriptEdit('chat', key, chatScriptText(idx))}
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              แก้ไข
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => copyOrUseText(`sc-${idx}`, chatScriptText(idx), true)}
+                              className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                            >
+                              ใส่ในแชท
+                            </button>
+                          </div>
+                        </div>
+                        {isEditing ? (
+                          <div className="space-y-1.5">
+                            <textarea
+                              rows={4}
+                              value={scriptDraft}
+                              onChange={(e) => setScriptDraft(e.target.value)}
+                              aria-label={`แก้ไขสคริปต์: ${sc.title}`}
+                              className="w-full resize-y rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-emerald-600 focus:outline-none"
+                            />
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={saveScriptEdit}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" />
+                                บันทึก
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelScriptEdit}
+                                className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                              >
+                                ยกเลิก
+                              </button>
+                              {isOverridden && (
+                                <button
+                                  type="button"
+                                  onClick={() => resetScriptOverride('chat', key)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  คืนค่าเดิม
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-600 leading-relaxed line-clamp-3">
+                            {chatScriptText(idx)}
+                          </p>
+                        )}
                       </div>
-                      <p className="text-xs text-slate-600 leading-relaxed line-clamp-3">
-                        {sc.text}
-                      </p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Upsell Snippets */}
                 <div className="space-y-2.5 pt-2 border-t border-slate-200">
                   <h4 className="text-xs font-bold text-slate-900">สคริปต์เสนอ Upsell</h4>
-                  {UPSELL_OPTIONS.map((up) => (
-                    <div
-                      key={up.id}
-                      className="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-1"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-slate-900">{up.title}</span>
-                        <button
-                          type="button"
-                          onClick={() => copyOrUseText(up.id, up.script, true)}
-                          className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 shrink-0 cursor-pointer"
-                        >
-                          ใส่ในแชท
-                        </button>
+                  {UPSELL_OPTIONS.map((up) => {
+                    const isEditing = editingScript?.kind === 'upsell' && editingScript.key === up.id;
+                    const isOverridden = scriptOverrides.upsell[up.id] !== undefined;
+                    return (
+                      <div
+                        key={up.id}
+                        className="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-1"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-slate-900">{up.title}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => startScriptEdit('upsell', up.id, upsellScriptText(up.id))}
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              แก้ไข
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => copyOrUseText(up.id, upsellScriptText(up.id), true)}
+                              className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                            >
+                              ใส่ในแชท
+                            </button>
+                          </div>
+                        </div>
+                        {isEditing ? (
+                          <div className="space-y-1.5">
+                            <textarea
+                              rows={4}
+                              value={scriptDraft}
+                              onChange={(e) => setScriptDraft(e.target.value)}
+                              aria-label={`แก้ไขสคริปต์ Upsell: ${up.title}`}
+                              className="w-full resize-y rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-emerald-600 focus:outline-none"
+                            />
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={saveScriptEdit}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" />
+                                บันทึก
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelScriptEdit}
+                                className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                              >
+                                ยกเลิก
+                              </button>
+                              {isOverridden && (
+                                <button
+                                  type="button"
+                                  onClick={() => resetScriptOverride('upsell', up.id)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  คืนค่าเดิม
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="text-xs text-slate-600 leading-relaxed line-clamp-3">
+                              {upsellScriptText(up.id)}
+                            </p>
+                            <div className="text-[11px] text-slate-500">
+                              {up.priceText} · {up.bestFor}
+                            </div>
+                          </>
+                        )}
                       </div>
-                      <div className="text-[11px] text-slate-500">
-                        {up.priceText} · {up.bestFor}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Quick Product Reference */}
