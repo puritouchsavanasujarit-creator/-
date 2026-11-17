@@ -16,6 +16,7 @@ import {
   extractWebSources,
   findScenario,
   formatGeminiError,
+  modelChainStartingWith,
   parseGeminiJson,
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
@@ -110,14 +111,16 @@ async function handleChatHint(request: Request, env: Env): Promise<Response> {
     const scenario = findScenario(scenarioId);
     if (!scenario) return json({ error: 'ไม่พบสถานการณ์ฝึกซ้อมที่ระบุ' }, 400);
 
-    const data = await generate(env, GEMINI_MODELS.hint, {
-      contents: [{ role: 'user', parts: [{ text: buildHintPrompt(scenario, messages, currentStage) }] }],
-      generationConfig: {
-        thinkingConfig: { thinkingLevel: THINKING_LEVELS.hint },
-        responseMimeType: 'application/json',
-        responseSchema: HINT_SCHEMA,
-      },
-    });
+    const data = await withModelFallback(modelChainStartingWith(GEMINI_MODELS.hint), (model) =>
+      generate(env, model, {
+        contents: [{ role: 'user', parts: [{ text: buildHintPrompt(scenario, messages, currentStage) }] }],
+        generationConfig: {
+          thinkingConfig: { thinkingLevel: THINKING_LEVELS.hint },
+          responseMimeType: 'application/json',
+          responseSchema: HINT_SCHEMA,
+        },
+      })
+    );
 
     return json(parseGeminiJson(readText(data)));
   } catch (error) {
@@ -227,22 +230,24 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
       return json({ error: 'กรุณาระบุชื่อสถานที่ โรงพยาบาล หรือจุดจัดส่ง' }, 400);
     }
 
-    const data = await generate(env, GEMINI_MODELS.maps, {
-      contents: [{ role: 'user', parts: [{ text: buildMapsPrompt(query.trim()) }] }],
-      tools: [{ googleMaps: {} }],
-      ...(latLng
-        ? {
-            toolConfig: {
-              retrievalConfig: {
-                latLng: {
-                  latitude: latLng.latitude,
-                  longitude: latLng.longitude,
+    const data = await withModelFallback(modelChainStartingWith(GEMINI_MODELS.maps), (model) =>
+      generate(env, model, {
+        contents: [{ role: 'user', parts: [{ text: buildMapsPrompt(query.trim()) }] }],
+        tools: [{ googleMaps: {} }],
+        ...(latLng
+          ? {
+              toolConfig: {
+                retrievalConfig: {
+                  latLng: {
+                    latitude: latLng.latitude,
+                    longitude: latLng.longitude,
+                  },
                 },
               },
-            },
-          }
-        : {}),
-    });
+            }
+          : {}),
+      })
+    );
 
     return json({
       answerMarkdown: readText(data),

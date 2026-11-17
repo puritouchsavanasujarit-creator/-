@@ -22,6 +22,7 @@ import {
   extractWebSources,
   findScenario,
   formatGeminiError,
+  modelChainStartingWith,
   parseGeminiJson,
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
@@ -132,15 +133,19 @@ async function createApp() {
       }
 
       const ai = getAiClient();
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODELS.hint,
-        contents: buildHintPrompt(scenario, messages, currentStage),
-        config: {
-          thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.hint] },
-          responseMimeType: 'application/json',
-          responseSchema: HINT_SCHEMA as any,
-        },
-      });
+      const response = await withModelFallback(
+        modelChainStartingWith(GEMINI_MODELS.hint),
+        (model) =>
+          ai.models.generateContent({
+            model,
+            contents: buildHintPrompt(scenario, messages, currentStage),
+            config: {
+              thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.hint] },
+              responseMimeType: 'application/json',
+              responseSchema: HINT_SCHEMA as any,
+            },
+          })
+      );
 
       res.json(parseGeminiJson(response.text));
     } catch (error) {
@@ -283,25 +288,29 @@ async function createApp() {
       }
 
       const ai = getAiClient();
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODELS.maps,
-        contents: buildMapsPrompt(query.trim()),
-        config: {
-          tools: [{ googleMaps: {} }],
-          ...(latLng
-            ? {
-                toolConfig: {
-                  retrievalConfig: {
-                    latLng: {
-                      latitude: latLng.latitude,
-                      longitude: latLng.longitude,
+      const response = await withModelFallback(
+        modelChainStartingWith(GEMINI_MODELS.maps),
+        (model) =>
+          ai.models.generateContent({
+            model,
+            contents: buildMapsPrompt(query.trim()),
+            config: {
+              tools: [{ googleMaps: {} }],
+              ...(latLng
+                ? {
+                    toolConfig: {
+                      retrievalConfig: {
+                        latLng: {
+                          latitude: latLng.latitude,
+                          longitude: latLng.longitude,
+                        },
+                      },
                     },
-                  },
-                },
-              }
-            : {}),
-        },
-      });
+                  }
+                : {}),
+            },
+          })
+      );
 
       res.json({
         answerMarkdown: response.text ?? '',

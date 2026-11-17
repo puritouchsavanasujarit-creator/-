@@ -36,6 +36,12 @@ export const GEMINI_MODELS = {
   maps: PRIMARY_MODEL,
 } as const;
 
+// Endpoints that prefer one model still need backups: start with their preferred
+// model, then every other model of the shared chain.
+export function modelChainStartingWith(preferred: string): readonly string[] {
+  return [preferred, ...GEMINI_MODEL_CHAIN.filter((model) => model !== preferred)];
+}
+
 export const THINKING_LEVELS = {
   chat: 'LOW',
   hint: 'MINIMAL',
@@ -48,11 +54,23 @@ const MENTOR_HISTORY_LIMIT = 20;
 const RETRIES_PER_MODEL = 1;
 const RETRY_DELAY_MS = 600;
 
+// A slow model is as unavailable as a throttled one: after this long the request
+// moves to the next model instead of waiting for the primary to answer.
+export const MODEL_TIMEOUT_MS = 12_000;
+
+export class ModelTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`MODEL_TIMEOUT after ${timeoutMs}ms`);
+    this.name = 'ModelTimeoutError';
+  }
+}
+
 type FailureAction = 'fallback' | 'retry' | 'throw';
 
 // 429/503 cannot serve this model now, so switch models at once. Overload spikes
 // are often brief, so they get one retry first. Anything else is a real error.
 function classifyFailure(error: unknown): FailureAction {
+  if (error instanceof ModelTimeoutError) return 'fallback';
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (message.includes('429') || message.includes('resource_exhausted') || message.includes('503')) {
     return 'fallback';
@@ -63,15 +81,26 @@ function classifyFailure(error: unknown): FailureAction {
   return 'throw';
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new ModelTimeoutError(timeoutMs)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
 export async function withModelFallback<T>(
   models: readonly string[],
-  generate: (model: string) => Promise<T>
+  generate: (model: string) => Promise<T>,
+  timeoutMs: number = MODEL_TIMEOUT_MS
 ): Promise<T> {
   let lastError: unknown;
   for (const model of models) {
     for (let attempt = 0; attempt <= RETRIES_PER_MODEL; attempt += 1) {
       try {
-        return await generate(model);
+        return await withTimeout(generate(model), timeoutMs);
       } catch (error) {
         lastError = error;
         const action = classifyFailure(error);
