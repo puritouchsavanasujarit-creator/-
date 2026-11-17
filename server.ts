@@ -7,6 +7,7 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
   CHAT_TURN_SCHEMA,
   EVALUATION_SCHEMA,
+  GEMINI_MODEL_CHAINS,
   GEMINI_MODELS,
   HINT_SCHEMA,
   THINKING_LEVELS,
@@ -22,12 +23,14 @@ import {
   findScenario,
   formatGeminiError,
   parseGeminiJson,
+  withModelFallback,
 } from './src/shared/geminiPrompts.ts';
 import type {
   ChatMessageInput,
   MentorHistoryItem,
   ThinkingName,
 } from './src/shared/geminiPrompts.ts';
+import { isExaConfigured, searchWeb } from './src/server/exaSearch.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,7 +63,11 @@ async function createApp() {
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, geminiApiKeyConfigured: Boolean(process.env.GEMINI_API_KEY) });
+    res.json({
+      ok: true,
+      geminiApiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
+      exaApiKeyConfigured: isExaConfigured(),
+    });
   });
 
   app.post('/api/chat/turn', async (req: Request, res: Response) => {
@@ -88,15 +95,20 @@ async function createApp() {
       }
 
       const ai = getAiClient();
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODELS.chat,
-        contents: buildChatTurnPrompt(scenario, messages, currentStage),
-        config: {
-          thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.chat] },
-          responseMimeType: 'application/json',
-          responseSchema: CHAT_TURN_SCHEMA as any,
-        },
-      });
+      const contents = buildChatTurnPrompt(scenario, messages, currentStage);
+      const response = await withModelFallback(
+        GEMINI_MODEL_CHAINS.chat,
+        (model) =>
+          ai.models.generateContent({
+            model,
+            contents,
+            config: {
+              thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.chat] },
+              responseMimeType: 'application/json',
+              responseSchema: CHAT_TURN_SCHEMA as any,
+            },
+          })
+      );
 
       res.json(parseGeminiJson(response.text));
     } catch (error) {
@@ -151,15 +163,20 @@ async function createApp() {
       }
 
       const ai = getAiClient();
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODELS.evaluation,
-        contents: buildEvaluationPrompt(scenario, messages),
-        config: {
-          thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.evaluation] },
-          responseMimeType: 'application/json',
-          responseSchema: EVALUATION_SCHEMA as any,
-        },
-      });
+      const contents = buildEvaluationPrompt(scenario, messages);
+      const response = await withModelFallback(
+        GEMINI_MODEL_CHAINS.evaluation,
+        (model) =>
+          ai.models.generateContent({
+            model,
+            contents,
+            config: {
+              thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.evaluation] },
+              responseMimeType: 'application/json',
+              responseSchema: EVALUATION_SCHEMA as any,
+            },
+          })
+      );
 
       res.json(parseGeminiJson(response.text));
     } catch (error) {
@@ -230,6 +247,23 @@ async function createApp() {
     } catch (error) {
       const formatted = formatGeminiError(error);
       res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+
+  // Exa web search: returns ranked web pages with highlights for the app/agent
+  app.post('/api/tools/web-search', async (req: Request, res: Response) => {
+    try {
+      const { query, numResults } = req.body as { query: string; numResults?: number };
+      if (!query || !query.trim()) {
+        res.status(400).json({ error: 'กรุณาระบุคำค้นหา' });
+        return;
+      }
+
+      res.json(await searchWeb(query, numResults));
+    } catch (error) {
+      res
+        .status(500)
+        .json({ error: error instanceof Error ? error.message : 'ไม่สามารถค้นหาเว็บด้วย Exa ได้' });
     }
   });
 

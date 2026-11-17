@@ -1,6 +1,7 @@
 import {
   CHAT_TURN_SCHEMA,
   EVALUATION_SCHEMA,
+  GEMINI_MODEL_CHAINS,
   GEMINI_MODELS,
   HINT_SCHEMA,
   THINKING_LEVELS,
@@ -16,6 +17,7 @@ import {
   findScenario,
   formatGeminiError,
   parseGeminiJson,
+  withModelFallback,
 } from './src/shared/geminiPrompts.ts';
 import type { ChatMessageInput, MentorHistoryItem } from './src/shared/geminiPrompts.ts';
 
@@ -78,14 +80,17 @@ async function handleChatTurn(request: Request, env: Env): Promise<Response> {
       return json({ error: 'ไม่พบข้อความตอบกลับของแอดมิน' }, 400);
     }
 
-    const data = await generate(env, GEMINI_MODELS.chat, {
+    const body = {
       contents: [{ role: 'user', parts: [{ text: buildChatTurnPrompt(scenario, messages, currentStage) }] }],
       generationConfig: {
         thinkingConfig: { thinkingLevel: THINKING_LEVELS.chat },
         responseMimeType: 'application/json',
         responseSchema: CHAT_TURN_SCHEMA,
       },
-    });
+    };
+    const data = await withModelFallback(GEMINI_MODEL_CHAINS.chat, (model) =>
+      generate(env, model, body)
+    );
 
     return json(parseGeminiJson(readText(data)));
   } catch (error) {
@@ -131,14 +136,17 @@ async function handleEvaluate(request: Request, env: Env): Promise<Response> {
     const scenario = findScenario(scenarioId);
     if (!scenario) return json({ error: 'ไม่พบสถานการณ์ฝึกซ้อมที่ระบุ' }, 400);
 
-    const data = await generate(env, GEMINI_MODELS.evaluation, {
+    const body = {
       contents: [{ role: 'user', parts: [{ text: buildEvaluationPrompt(scenario, messages) }] }],
       generationConfig: {
         thinkingConfig: { thinkingLevel: THINKING_LEVELS.evaluation },
         responseMimeType: 'application/json',
         responseSchema: EVALUATION_SCHEMA,
       },
-    });
+    };
+    const data = await withModelFallback(GEMINI_MODEL_CHAINS.evaluation, (model) =>
+      generate(env, model, body)
+    );
 
     return json(parseGeminiJson(readText(data)));
   } catch (error) {

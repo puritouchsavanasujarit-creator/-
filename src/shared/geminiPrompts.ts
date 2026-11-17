@@ -26,12 +26,16 @@ export interface GeminiSchema {
 }
 
 export const GEMINI_MODELS = {
-  chat: 'gemini-4-hydrogen',
   hint: 'gemini-3.1-flash-lite',
-  evaluation: 'gemini-4-hydrogen',
   mentor: 'gemini-4-hydrogen',
   search: 'gemini-4-hydrogen',
   maps: 'gemini-4-hydrogen',
+} as const;
+
+// Tried in order: the primary, then a model with separate quota that still serves.
+export const GEMINI_MODEL_CHAINS = {
+  chat: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+  evaluation: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
 } as const;
 
 export const THINKING_LEVELS = {
@@ -42,6 +46,47 @@ export const THINKING_LEVELS = {
 } as const;
 
 const MENTOR_HISTORY_LIMIT = 20;
+
+const RETRIES_PER_MODEL = 1;
+const RETRY_DELAY_MS = 600;
+
+type FailureAction = 'fallback' | 'retry' | 'throw';
+
+// 429/503 cannot serve this model now, so switch models at once. Overload spikes
+// are often brief, so they get one retry first. Anything else is a real error.
+function classifyFailure(error: unknown): FailureAction {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (message.includes('429') || message.includes('resource_exhausted') || message.includes('503')) {
+    return 'fallback';
+  }
+  if (message.includes('unavailable') || message.includes('high demand') || message.includes('overloaded')) {
+    return 'retry';
+  }
+  return 'throw';
+}
+
+export async function withModelFallback<T>(
+  models: readonly string[],
+  generate: (model: string) => Promise<T>
+): Promise<T> {
+  let lastError: unknown;
+  for (const model of models) {
+    for (let attempt = 0; attempt <= RETRIES_PER_MODEL; attempt += 1) {
+      try {
+        return await generate(model);
+      } catch (error) {
+        lastError = error;
+        const action = classifyFailure(error);
+        if (action === 'throw') throw error;
+        if (action === 'fallback') break;
+        if (attempt < RETRIES_PER_MODEL) {
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        }
+      }
+    }
+  }
+  throw lastError;
+}
 
 export interface MentorHistoryMessage {
   role: 'user' | 'model';
