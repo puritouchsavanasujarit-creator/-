@@ -14,8 +14,14 @@ MANIFEST="deploy/manifest.json"
 echo "==> Building frontend (vite)"
 bun run build
 
+ESBUILD_BIN="./node_modules/.bin/esbuild"
+if [ ! -x "$ESBUILD_BIN" ]; then
+  echo "Missing $ESBUILD_BIN - run: bun install --frozen-lockfile" >&2
+  exit 1
+fi
+
 echo "==> Bundling worker (esbuild)"
-bunx esbuild worker.ts \
+"$ESBUILD_BIN" worker.ts \
   --bundle \
   --format=esm \
   --platform=neutral \
