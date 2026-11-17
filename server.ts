@@ -7,7 +7,7 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
   CHAT_TURN_SCHEMA,
   EVALUATION_SCHEMA,
-  GEMINI_MODEL_CHAINS,
+  GEMINI_MODEL_CHAIN,
   GEMINI_MODELS,
   HINT_SCHEMA,
   THINKING_LEVELS,
@@ -97,7 +97,7 @@ async function createApp() {
       const ai = getAiClient();
       const contents = buildChatTurnPrompt(scenario, messages, currentStage);
       const response = await withModelFallback(
-        GEMINI_MODEL_CHAINS.chat,
+        GEMINI_MODEL_CHAIN,
         (model) =>
           ai.models.generateContent({
             model,
@@ -165,7 +165,7 @@ async function createApp() {
       const ai = getAiClient();
       const contents = buildEvaluationPrompt(scenario, messages);
       const response = await withModelFallback(
-        GEMINI_MODEL_CHAINS.evaluation,
+        GEMINI_MODEL_CHAIN,
         (model) =>
           ai.models.generateContent({
             model,
@@ -204,16 +204,17 @@ async function createApp() {
 
       const formattedHistory = buildMentorHistory(history);
 
-      const chat = ai.chats.create({
-        model: GEMINI_MODELS.mentor,
-        history: formattedHistory,
-        config: {
-          systemInstruction: buildMentorSystemInstruction(scenario),
-          thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.mentor] },
-        },
+      const response = await withModelFallback(GEMINI_MODEL_CHAIN, (model) => {
+        const chat = ai.chats.create({
+          model,
+          history: formattedHistory,
+          config: {
+            systemInstruction: buildMentorSystemInstruction(scenario),
+            thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.mentor] },
+          },
+        });
+        return chat.sendMessage({ message: message.trim() });
       });
-
-      const response = await chat.sendMessage({ message: message.trim() });
       res.json({ reply: response.text ?? '' });
     } catch (error) {
       const formatted = formatGeminiError(error);
@@ -231,14 +232,16 @@ async function createApp() {
       }
 
       const ai = getAiClient();
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODELS.search,
-        contents: query.trim(),
-        config: {
-          systemInstruction: buildSearchSystemInstruction(),
-          tools: [{ googleSearch: {} }],
-        },
-      });
+      const response = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
+        ai.models.generateContent({
+          model,
+          contents: query.trim(),
+          config: {
+            systemInstruction: buildSearchSystemInstruction(),
+            tools: [{ googleSearch: {} }],
+          },
+        })
+      );
 
       res.json({
         answerMarkdown: response.text ?? '',

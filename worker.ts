@@ -1,7 +1,7 @@
 import {
   CHAT_TURN_SCHEMA,
   EVALUATION_SCHEMA,
-  GEMINI_MODEL_CHAINS,
+  GEMINI_MODEL_CHAIN,
   GEMINI_MODELS,
   HINT_SCHEMA,
   THINKING_LEVELS,
@@ -88,7 +88,7 @@ async function handleChatTurn(request: Request, env: Env): Promise<Response> {
         responseSchema: CHAT_TURN_SCHEMA,
       },
     };
-    const data = await withModelFallback(GEMINI_MODEL_CHAINS.chat, (model) =>
+    const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
       generate(env, model, body)
     );
 
@@ -144,7 +144,7 @@ async function handleEvaluate(request: Request, env: Env): Promise<Response> {
         responseSchema: EVALUATION_SCHEMA,
       },
     };
-    const data = await withModelFallback(GEMINI_MODEL_CHAINS.evaluation, (model) =>
+    const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
       generate(env, model, body)
     );
 
@@ -173,13 +173,16 @@ async function handleMentorChat(request: Request, env: Env): Promise<Response> {
       { role: 'user' as const, parts: [{ text: message.trim() }] },
     ];
 
-    const data = await generate(env, GEMINI_MODELS.mentor, {
+    const body = {
       contents,
       systemInstruction: { parts: [{ text: buildMentorSystemInstruction(scenario) }] },
       generationConfig: {
         thinkingConfig: { thinkingLevel: THINKING_LEVELS.mentor },
       },
-    });
+    };
+    const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
+      generate(env, model, body)
+    );
 
     return json({ reply: readText(data) });
   } catch (error) {
@@ -195,11 +198,14 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
       return json({ error: 'กรุณาระบุคำค้นหา' }, 400);
     }
 
-    const data = await generate(env, GEMINI_MODELS.search, {
+    const body = {
       contents: [{ role: 'user', parts: [{ text: query.trim() }] }],
       systemInstruction: { parts: [{ text: buildSearchSystemInstruction() }] },
       tools: [{ googleSearch: {} }],
-    });
+    };
+    const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
+      generate(env, model, body)
+    );
 
     return json({
       answerMarkdown: readText(data),

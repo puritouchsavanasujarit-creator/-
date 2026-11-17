@@ -25,17 +25,15 @@ export interface GeminiSchema {
   required?: string[];
 }
 
-export const GEMINI_MODELS = {
-  hint: 'gemini-3.1-flash-lite',
-  mentor: 'gemini-4-hydrogen',
-  search: 'gemini-4-hydrogen',
-  maps: 'gemini-4-hydrogen',
-} as const;
+const PRIMARY_MODEL = 'gemini-4-hydrogen';
+const FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 
 // Tried in order: the primary, then a model with separate quota that still serves.
-export const GEMINI_MODEL_CHAINS = {
-  chat: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
-  evaluation: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+export const GEMINI_MODEL_CHAIN = [PRIMARY_MODEL, FALLBACK_MODEL] as const;
+
+export const GEMINI_MODELS = {
+  hint: FALLBACK_MODEL,
+  maps: PRIMARY_MODEL,
 } as const;
 
 export const THINKING_LEVELS = {
