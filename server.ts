@@ -36,7 +36,23 @@ import { isExaConfigured, searchWeb } from './src/server/exaSearch.ts';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT) || 3000;
+function getArgValue(flag: string): string | undefined {
+  const idx = process.argv.indexOf(flag);
+  if (idx !== -1 && idx + 1 < process.argv.length) {
+    return process.argv[idx + 1];
+  }
+  const eqPrefix = `${flag}=`;
+  const eqArg = process.argv.find((arg) => arg.startsWith(eqPrefix));
+  return eqArg ? eqArg.slice(eqPrefix.length) : undefined;
+}
+
+const cliPort = Number(getArgValue('--port'));
+const envPort =
+  process.env.PORT && process.env.PORT !== process.env.NGINX_PORT
+    ? Number(process.env.PORT)
+    : Number(process.env.DEFAULT_APP_PORT) || 3000;
+const PORT = Number.isFinite(cliPort) && cliPort > 0 ? cliPort : envPort || 3000;
+const HOST = getArgValue('--host') || '0.0.0.0';
 
 const THINKING_TO_SDK: Record<ThinkingName, ThinkingLevel> = {
   LOW: ThinkingLevel.LOW,
@@ -337,9 +353,17 @@ async function createApp() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`Server running on http://${HOST}:${PORT}`);
+  });
+
+  server.on('error', (err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
   });
 }
 
-createApp();
+createApp().catch((err) => {
+  console.error('Unhandled error during server startup:', err);
+  process.exit(1);
+});
