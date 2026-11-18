@@ -27,6 +27,8 @@ interface MentorMsg {
 interface SearchResult {
   answerMarkdown: string;
   sources: Array<{ title: string; uri: string }>;
+  grounded?: boolean;
+  notice?: string;
 }
 
 interface MapsResult {
@@ -460,6 +462,11 @@ export function MentorAndGroundingView({ activeScenarioId }: { activeScenarioId:
 
                 {searchResult && (
                   <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    {searchResult.notice && (
+                      <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200">
+                        {searchResult.notice}
+                      </div>
+                    )}
                     <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-line">
                       {searchResult.answerMarkdown}
                     </div>

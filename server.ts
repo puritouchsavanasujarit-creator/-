@@ -22,6 +22,7 @@ import {
   extractWebSources,
   findScenario,
   formatGeminiError,
+  groundingFailureStatus,
   modelChainStartingWith,
   parseGeminiJson,
   withModelFallback,
@@ -253,21 +254,47 @@ async function createApp() {
       }
 
       const ai = getAiClient();
-      const response = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-        ai.models.generateContent({
-          model,
-          contents: query.trim(),
-          config: {
-            systemInstruction: buildSearchSystemInstruction(),
-            tools: [{ googleSearch: {} }],
-          },
-        })
-      );
+      try {
+        const response = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
+          ai.models.generateContent({
+            model,
+            contents: query.trim(),
+            config: {
+              systemInstruction: buildSearchSystemInstruction(),
+              tools: [{ googleSearch: {} }],
+            },
+          })
+        );
 
-      res.json({
-        answerMarkdown: response.text ?? '',
-        sources: extractWebSources(response.candidates),
-      });
+        res.json({
+          answerMarkdown: response.text ?? '',
+          sources: extractWebSources(response.candidates),
+          grounded: true,
+        });
+        return;
+      } catch (groundingError) {
+        const groundingStatus = groundingFailureStatus(groundingError);
+        if (groundingStatus === null) throw groundingError;
+
+        // Grounding quota is exhausted: answer without live sources instead.
+        const response = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
+          ai.models.generateContent({
+            model,
+            contents: query.trim(),
+            config: { systemInstruction: buildSearchSystemInstruction() },
+          })
+        );
+
+        res.json({
+          answerMarkdown: response.text ?? '',
+          sources: [],
+          grounded: false,
+          notice:
+            'ตอนนี้ระบบค้นหาเว็บแบบเรียลไทม์ใช้งานไม่ได้ชั่วคราว (โควตาการค้นหาเว็บเต็ม) คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีแหล่งอ้างอิง',
+          groundingStatus,
+        });
+        return;
+      }
     } catch (error) {
       const formatted = formatGeminiError(error);
       res.status(formatted.status).json({ error: formatted.message });

@@ -175,6 +175,23 @@ export function formatTranscript(messages: ChatMessageInput[]): string {
     .join('\n');
 }
 
+// Grounding (Search/Maps) has its own quota, separate from normal generation.
+// Only quota/availability failures may switch to a non-grounded retry; any other
+// error must surface unchanged instead of being masked by a second call.
+export function groundingFailureStatus(error: unknown): 429 | 503 | null {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (message.includes('429') || message.includes('resource_exhausted')) return 429;
+  if (
+    message.includes('503') ||
+    message.includes('unavailable') ||
+    message.includes('overloaded') ||
+    message.includes('high demand')
+  ) {
+    return 503;
+  }
+  return null;
+}
+
 export function formatGeminiError(error: unknown): { status: number; message: string } {
   const errMsg = error instanceof Error ? error.message : String(error);
   if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('PERMISSION_DENIED') || errMsg.includes('403')) {

@@ -16,6 +16,7 @@ import {
   extractWebSources,
   findScenario,
   formatGeminiError,
+  groundingFailureStatus,
   modelChainStartingWith,
   parseGeminiJson,
   withModelFallback,
@@ -204,16 +205,37 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
     const body = {
       contents: [{ role: 'user', parts: [{ text: query.trim() }] }],
       systemInstruction: { parts: [{ text: buildSearchSystemInstruction() }] },
-      tools: [{ googleSearch: {} }],
     };
-    const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-      generate(env, model, body)
-    );
 
-    return json({
-      answerMarkdown: readText(data),
-      sources: extractWebSources(data?.candidates),
-    });
+    try {
+      const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
+        generate(env, model, { ...body, tools: [{ googleSearch: {} }] })
+      );
+
+      return json({
+        answerMarkdown: readText(data),
+        sources: extractWebSources(data?.candidates),
+        grounded: true,
+      });
+    } catch (groundingError) {
+      const groundingStatus = groundingFailureStatus(groundingError);
+      if (groundingStatus === null) throw groundingError;
+
+      // Grounding quota is exhausted: answer from model knowledge without live
+      // sources instead of failing, and tell the UI that no sources were used.
+      const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
+        generate(env, model, body)
+      );
+
+      return json({
+        answerMarkdown: readText(data),
+        sources: [],
+        grounded: false,
+        notice:
+          'ตอนนี้ระบบค้นหาเว็บแบบเรียลไทม์ใช้งานไม่ได้ชั่วคราว (โควตาการค้นหาเว็บเต็ม) คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีแหล่งอ้างอิง',
+        groundingStatus,
+      });
+    }
   } catch (error) {
     const formatted = formatGeminiError(error);
     return json({ error: formatted.message }, formatted.status);
