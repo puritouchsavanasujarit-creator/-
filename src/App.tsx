@@ -3,6 +3,7 @@ import { TRAINING_SCENARIOS } from '@/src/data/playbookData';
 import type { AppTab, SavedAttempt, QuizProgress } from '@/src/types';
 import { FirebaseProvider, useFirebaseAuth } from '@/src/contexts/FirebaseContext';
 import { ThemeProvider } from '@/src/contexts/ThemeContext';
+import { ToastProvider, useToast } from '@/src/contexts/ToastContext';
 import {
   clearAllUserProgress,
   saveAttemptDoc,
@@ -22,6 +23,7 @@ const QUIZ_STORAGE_KEY = 'chatcraft_quiz_progress_v1';
 
 function AppShell() {
   const { user, authReady, authError, signInWithGoogle } = useFirebaseAuth();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<AppTab>('simulator');
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>(TRAINING_SCENARIOS[0].id);
   const [resetSignal, setResetSignal] = useState(0);
@@ -89,20 +91,46 @@ function AppShell() {
     if (user) {
       try {
         await saveAttemptDoc(user.uid, attempt);
+        showToast({
+          variant: 'success',
+          title: 'บันทึกผลการฝึกซ้อมแล้ว',
+          description: `${attempt.scenarioTitle} · คะแนน ${attempt.overallScore}/100`,
+        });
       } catch (err) {
         console.error('Failed to save attempt to Firestore:', err);
+        showToast({
+          variant: 'error',
+          title: 'บันทึกผลการฝึกซ้อมไม่สำเร็จ',
+          description: 'เกิดข้อผิดพลาดระหว่างบันทึกลง Cloud กรุณาลองใหม่อีกครั้ง',
+        });
       }
     } else {
       setLocalAttempts((prev) => [attempt, ...prev].slice(0, 365));
+      showToast({
+        variant: 'success',
+        title: 'บันทึกผลการฝึกซ้อมแล้ว',
+        description: `${attempt.scenarioTitle} · คะแนน ${attempt.overallScore}/100`,
+      });
     }
   };
 
   const handleCompleteQuiz = async (score: number, total: number) => {
+    const percent = total > 0 ? Math.round((score / total) * 100) : 0;
     if (user) {
       try {
         await saveQuizSummaryDoc(user.uid, score, total);
+        showToast({
+          variant: 'success',
+          title: 'บันทึกผลแบบทดสอบสำเร็จ',
+          description: `ได้คะแนน ${score}/${total} ข้อ (${percent}%)`,
+        });
       } catch (err) {
         console.error('Failed to save quiz to Firestore:', err);
+        showToast({
+          variant: 'error',
+          title: 'บันทึกผลแบบทดสอบไม่สำเร็จ',
+          description: 'เกิดข้อผิดพลาดระหว่างบันทึกลง Cloud กรุณาลองใหม่อีกครั้ง',
+        });
       }
     } else {
       setLocalQuizProgress((prev) => ({
@@ -110,6 +138,11 @@ function AppShell() {
         totalQuestions: total,
         lastAttemptIso: new Date().toISOString(),
       }));
+      showToast({
+        variant: 'success',
+        title: 'บันทึกผลแบบทดสอบสำเร็จ',
+        description: `ได้คะแนน ${score}/${total} ข้อ (${percent}%)`,
+      });
     }
   };
 
@@ -192,9 +225,11 @@ function AppShell() {
 export default function App() {
   return (
     <ThemeProvider>
-      <FirebaseProvider>
-        <AppShell />
-      </FirebaseProvider>
+      <ToastProvider>
+        <FirebaseProvider>
+          <AppShell />
+        </FirebaseProvider>
+      </ToastProvider>
     </ThemeProvider>
   );
 }
