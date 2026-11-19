@@ -11,6 +11,7 @@ import {
   buildMapsPrompt,
   buildMapsToolConfig,
   buildMentorHistory,
+  EXA_FALLBACK_NOTICE,
   buildMentorSystemInstruction,
   buildSearchSystemInstruction,
   extractMapPlaces,
@@ -23,9 +24,11 @@ import {
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
 import type { ChatMessageInput, MentorHistoryItem } from './src/shared/geminiPrompts.ts';
+import { searchWeb, searchWebSources } from './src/shared/exaSearch.ts';
 
 interface Env {
   GEMINI_API_KEY?: string;
+  EXA_API_KEY?: string;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
 }
 
@@ -219,17 +222,43 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
         grounded: true,
       });
     } catch (groundingError) {
-      // Grounding quota is exhausted: answer from model knowledge, no sources.
+      // Grounding quota is exhausted: answer from model knowledge and attach
+      // backup reference links from Exa when it is configured.
       const fallback = groundingFallback('search', groundingError);
-      const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-        generate(env, model, body)
-      );
+      const [data, sources] = await Promise.all([
+        withModelFallback(GEMINI_MODEL_CHAIN, (model) => generate(env, model, body)),
+        searchWebSources(query.trim(), env.EXA_API_KEY),
+      ]);
 
-      return json({ answerMarkdown: readText(data), sources: [], ...fallback });
+      return json({
+        answerMarkdown: readText(data),
+        sources,
+        ...fallback,
+        ...(sources.length > 0 ? { notice: EXA_FALLBACK_NOTICE } : {}),
+      });
     }
   } catch (error) {
     const formatted = formatGeminiError(error);
     return json({ error: formatted.message }, formatted.status);
+  }
+}
+
+async function handleToolsWebSearch(request: Request, env: Env): Promise<Response> {
+  try {
+    const { query, numResults } = (await request.json()) as {
+      query: string;
+      numResults?: number;
+    };
+    if (!query || !query.trim()) {
+      return json({ error: 'กรุณาระบุคำค้นหา' }, 400);
+    }
+
+    return json(await searchWeb(query, numResults, env.EXA_API_KEY));
+  } catch (error) {
+    return json(
+      { error: error instanceof Error ? error.message : 'ไม่สามารถค้นหาเว็บด้วย Exa ได้' },
+      500
+    );
   }
 }
 
@@ -278,7 +307,11 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/api/health') {
-      return json({ ok: true, geminiApiKeyConfigured: Boolean(env.GEMINI_API_KEY) });
+      return json({
+        ok: true,
+        geminiApiKeyConfigured: Boolean(env.GEMINI_API_KEY),
+        exaApiKeyConfigured: Boolean(env.EXA_API_KEY),
+      });
     }
 
     if (request.method === 'POST') {
@@ -293,6 +326,8 @@ export default {
           return handleMentorChat(request, env);
         case '/api/tools/search':
           return handleToolsSearch(request, env);
+        case '/api/tools/web-search':
+          return handleToolsWebSearch(request, env);
         case '/api/tools/maps':
           return handleToolsMaps(request, env);
         default:

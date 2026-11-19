@@ -184,6 +184,10 @@ export const GROUNDING_NOTICES = {
   maps: 'ตอนนี้ระบบค้นหาสถานที่บน Google Maps ใช้งานไม่ได้ชั่วคราว (โควตาการค้นหาแผนที่เต็ม) คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีข้อมูลสถานที่จริง',
 } as const;
 
+// Used instead of GROUNDING_NOTICES.search when Exa supplies backup sources.
+export const EXA_FALLBACK_NOTICE =
+  'ตอนนี้ระบบค้นหาเว็บแบบเรียลไทม์ของ Google ใช้งานไม่ได้ชั่วคราว (โควตาการค้นหาเว็บเต็ม) คำตอบด้านล่างมาจากความรู้ของโมเดล โดยมีแหล่งอ้างอิงสำรองจาก Exa ให้ตรวจสอบแทน';
+
 // Returns the fields to add to a non-grounded answer, or rethrows errors that
 // must not be masked by a retry.
 export function groundingFallback(kind: keyof typeof GROUNDING_NOTICES, error: unknown) {

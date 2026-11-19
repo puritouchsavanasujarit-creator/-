@@ -17,6 +17,7 @@ import {
   buildMapsPrompt,
   buildMapsToolConfig,
   buildMentorHistory,
+  EXA_FALLBACK_NOTICE,
   buildMentorSystemInstruction,
   buildSearchSystemInstruction,
   extractMapPlaces,
@@ -33,7 +34,7 @@ import type {
   MentorHistoryItem,
   ThinkingName,
 } from './src/shared/geminiPrompts.ts';
-import { isExaConfigured, searchWeb } from './src/server/exaSearch.ts';
+import { isExaConfigured, searchWeb, searchWebSources } from './src/shared/exaSearch.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -274,17 +275,26 @@ async function createApp() {
         });
         return;
       } catch (groundingError) {
-        // Grounding quota is exhausted: answer without live sources instead.
+        // Grounding quota is exhausted: answer without live sources and attach
+        // backup reference links from Exa when it is configured.
         const fallback = groundingFallback('search', groundingError);
-        const response = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-          ai.models.generateContent({
-            model,
-            contents: query.trim(),
-            config: { systemInstruction: buildSearchSystemInstruction() },
-          })
-        );
+        const [response, sources] = await Promise.all([
+          withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
+            ai.models.generateContent({
+              model,
+              contents: query.trim(),
+              config: { systemInstruction: buildSearchSystemInstruction() },
+            })
+          ),
+          searchWebSources(query.trim()),
+        ]);
 
-        res.json({ answerMarkdown: response.text ?? '', sources: [], ...fallback });
+        res.json({
+          answerMarkdown: response.text ?? '',
+          sources,
+          ...fallback,
+          ...(sources.length > 0 ? { notice: EXA_FALLBACK_NOTICE } : {}),
+        });
         return;
       }
     } catch (error) {
