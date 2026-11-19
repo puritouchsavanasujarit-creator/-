@@ -150,6 +150,7 @@ export function SimulatorView({
   const [mapLookupResult, setMapLookupResult] = useState<{
     answerMarkdown: string;
     places: Array<{ title: string; uri: string }>;
+    notice?: string;
   } | null>(null);
 
   const [isScriptPickerOpen, setIsScriptPickerOpen] = useState(false);
@@ -1519,6 +1520,11 @@ export function SimulatorView({
                   </div>
                   {mapLookupResult && (
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200 space-y-2">
+                      {mapLookupResult.notice && (
+                        <p className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-800 dark:text-amber-200 leading-relaxed">
+                          {mapLookupResult.notice}
+                        </p>
+                      )}
                       <p className="leading-relaxed whitespace-pre-line">
                         {mapLookupResult.answerMarkdown}
                       </p>

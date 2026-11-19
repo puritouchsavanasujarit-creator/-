@@ -15,6 +15,7 @@ import {
   buildEvaluationPrompt,
   buildHintPrompt,
   buildMapsPrompt,
+  buildMapsToolConfig,
   buildMentorHistory,
   buildMentorSystemInstruction,
   buildSearchSystemInstruction,
@@ -22,7 +23,7 @@ import {
   extractWebSources,
   findScenario,
   formatGeminiError,
-  groundingFailureStatus,
+  groundingFallback,
   modelChainStartingWith,
   parseGeminiJson,
   withModelFallback,
@@ -273,10 +274,8 @@ async function createApp() {
         });
         return;
       } catch (groundingError) {
-        const groundingStatus = groundingFailureStatus(groundingError);
-        if (groundingStatus === null) throw groundingError;
-
         // Grounding quota is exhausted: answer without live sources instead.
+        const fallback = groundingFallback('search', groundingError);
         const response = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
           ai.models.generateContent({
             model,
@@ -285,14 +284,7 @@ async function createApp() {
           })
         );
 
-        res.json({
-          answerMarkdown: response.text ?? '',
-          sources: [],
-          grounded: false,
-          notice:
-            'ตอนนี้ระบบค้นหาเว็บแบบเรียลไทม์ใช้งานไม่ได้ชั่วคราว (โควตาการค้นหาเว็บเต็ม) คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีแหล่งอ้างอิง',
-          groundingStatus,
-        });
+        res.json({ answerMarkdown: response.text ?? '', sources: [], ...fallback });
         return;
       }
     } catch (error) {
@@ -331,34 +323,34 @@ async function createApp() {
       }
 
       const ai = getAiClient();
-      const response = await withModelFallback(
-        modelChainStartingWith(GEMINI_MODELS.maps),
-        (model) =>
+      const chain = modelChainStartingWith(GEMINI_MODELS.maps);
+      const contents = buildMapsPrompt(query.trim());
+
+      try {
+        const response = await withModelFallback(chain, (model) =>
           ai.models.generateContent({
             model,
-            contents: buildMapsPrompt(query.trim()),
-            config: {
-              tools: [{ googleMaps: {} }],
-              ...(latLng
-                ? {
-                    toolConfig: {
-                      retrievalConfig: {
-                        latLng: {
-                          latitude: latLng.latitude,
-                          longitude: latLng.longitude,
-                        },
-                      },
-                    },
-                  }
-                : {}),
-            },
+            contents,
+            config: { tools: [{ googleMaps: {} }], ...buildMapsToolConfig(latLng) },
           })
-      );
+        );
 
-      res.json({
-        answerMarkdown: response.text ?? '',
-        places: extractMapPlaces(response.candidates),
-      });
+        res.json({
+          answerMarkdown: response.text ?? '',
+          places: extractMapPlaces(response.candidates),
+          grounded: true,
+        });
+        return;
+      } catch (groundingError) {
+        // Maps quota is exhausted: answer without live place data.
+        const fallback = groundingFallback('maps', groundingError);
+        const response = await withModelFallback(chain, (model) =>
+          ai.models.generateContent({ model, contents })
+        );
+
+        res.json({ answerMarkdown: response.text ?? '', places: [], ...fallback });
+        return;
+      }
     } catch (error) {
       const formatted = formatGeminiError(error);
       res.status(formatted.status).json({ error: formatted.message });

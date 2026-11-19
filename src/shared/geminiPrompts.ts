@@ -176,20 +176,31 @@ export function formatTranscript(messages: ChatMessageInput[]): string {
 }
 
 // Grounding (Search/Maps) has its own quota, separate from normal generation.
-// Only quota/availability failures may switch to a non-grounded retry; any other
-// error must surface unchanged instead of being masked by a second call.
-export function groundingFailureStatus(error: unknown): 429 | 503 | null {
+// Only 429/503 may switch to a non-grounded retry; any other error must surface
+// unchanged instead of being masked by a second call.
+export const GROUNDING_NOTICES = {
+  search:
+    'ตอนนี้ระบบค้นหาเว็บแบบเรียลไทม์ใช้งานไม่ได้ชั่วคราว (โควตาการค้นหาเว็บเต็ม) คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีแหล่งอ้างอิง',
+  maps: 'ตอนนี้ระบบค้นหาสถานที่บน Google Maps ใช้งานไม่ได้ชั่วคราว (โควตาการค้นหาแผนที่เต็ม) คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีข้อมูลสถานที่จริง',
+} as const;
+
+// Returns the fields to add to a non-grounded answer, or rethrows errors that
+// must not be masked by a retry.
+export function groundingFallback(kind: keyof typeof GROUNDING_NOTICES, error: unknown) {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  if (message.includes('429') || message.includes('resource_exhausted')) return 429;
-  if (
+  const exhausted = message.includes('429') || message.includes('resource_exhausted');
+  const unavailable =
     message.includes('503') ||
     message.includes('unavailable') ||
     message.includes('overloaded') ||
-    message.includes('high demand')
-  ) {
-    return 503;
-  }
-  return null;
+    message.includes('high demand');
+  if (!exhausted && !unavailable) throw error;
+
+  return {
+    grounded: false as const,
+    notice: GROUNDING_NOTICES[kind],
+    groundingStatus: (exhausted ? 429 : 503) as 429 | 503,
+  };
 }
 
 export function formatGeminiError(error: unknown): { status: number; message: string } {
@@ -387,6 +398,11 @@ export function buildSearchSystemInstruction(): string {
 
 export function buildMapsPrompt(query: string): string {
   return `ช่วยตรวจสอบข้อมูลสถานที่จัดส่ง ตำแหน่งที่ตั้ง จุดสังเกต หรือแนวทางการเดินทางในกรุงเทพฯ/ประเทศไทยสำหรับ: ${query} (ตอบเป็นภาษาไทยกระชับเพื่อใช้ประกอบการนัดหมายแมสเซนเจอร์ส่งกระเช้าผลไม้)`;
+}
+
+// Maps grounding is sharper when it knows where the courier is heading from.
+export function buildMapsToolConfig(latLng?: { latitude: number; longitude: number }) {
+  return latLng ? { toolConfig: { retrievalConfig: { latLng } } } : {};
 }
 
 export const CHAT_TURN_SCHEMA: GeminiSchema = {
