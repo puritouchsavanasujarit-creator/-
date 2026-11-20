@@ -56,12 +56,12 @@ async function generate(env: Env, model: string, body: unknown): Promise<any> {
   }
   // An exhausted key says nothing about the model: retry the same request on the
   // backup key before letting the model count as failed.
-  return withApiKeyFallback(keys.length, async (index) => {
+  return withApiKeyFallback(keys, async (key) => {
     const response = await fetch(`${API_BASE}/${model}:generateContent`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': keys[index],
+        'x-goog-api-key': key,
       },
       body: JSON.stringify(body),
     });

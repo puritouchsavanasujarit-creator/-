@@ -106,6 +106,9 @@ export function describeModelFailure(error: unknown): { reason: ModelFailureReas
   const message = error instanceof Error ? error.message : String(error);
   const detail = message.slice(0, FAILURE_DETAIL_LIMIT);
   if (error instanceof ModelTimeoutError) return { reason: 'timeout', detail };
+  // A key chain keeps the reason of its last key, so the model failure reads as
+  // "throttled" rather than re-deriving it from the summary text.
+  if (error instanceof ApiKeyChainError) return { reason: error.reason, detail };
   const lower = message.toLowerCase();
   if (lower.includes('429') || lower.includes('resource_exhausted')) {
     return { reason: 'throttled', detail };
@@ -150,6 +153,7 @@ type FailureAction = 'fallback' | 'retry' | 'throw';
 // are often brief, so they get one retry first. Anything else is a real error.
 function classifyFailure(error: unknown): FailureAction {
   if (error instanceof ModelTimeoutError) return 'fallback';
+  if (error instanceof ApiKeyChainError) return classifyReason(error.reason);
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (message.includes('429') || message.includes('resource_exhausted') || message.includes('503')) {
     return 'fallback';
@@ -287,6 +291,20 @@ export function formatTranscript(messages: ChatMessageInput[]): string {
     .join('\n');
 }
 
+// How a key-chain outcome should be handled, shared by the model chain.
+function classifyReason(reason: ModelFailureReason): FailureAction {
+  switch (reason) {
+    case 'timeout':
+    case 'throttled':
+      return 'fallback';
+    case 'unavailable':
+    case 'overloaded':
+      return 'retry';
+    default:
+      return 'throw';
+  }
+}
+
 // Grounding (Search/Maps) has its own quota, separate from normal generation.
 // Every configured Gemini key, primary first, blanks dropped.
 export function geminiApiKeys(...keys: Array<string | undefined>): string[] {
@@ -308,24 +326,64 @@ export function apiKeyRotationAllowed(error: unknown): boolean {
   );
 }
 
-// Runs `run` with key 0 and, if that key is exhausted, again with key 1 (and so
-// on). One key means one attempt, exactly as before.
-export async function withApiKeyFallback<T>(
-  keyCount: number,
-  run: (keyIndex: number, attempt: number) => Promise<T>
+export interface ApiKeyFailure {
+  // 1-based slot of the key, never the key itself.
+  key: number;
+  reason: ModelFailureReason;
+}
+
+// Every key failed: say which slots were tried and why, never printing a key
+// value. The last error is kept so the response status stays the same.
+export class ApiKeyChainError extends Error {
+  readonly failures: readonly ApiKeyFailure[];
+  readonly lastError: unknown;
+
+  constructor(failures: ApiKeyFailure[], lastError: unknown) {
+    super(
+      `ทุกคีย์ที่ลองใช้งานไม่ได้ ลองแล้ว ${failures
+        .map((f) => `คีย์#${f.key}: ${f.reason}`)
+        .join(', ')}`
+    );
+    this.name = 'ApiKeyChainError';
+    this.failures = failures;
+    this.lastError = lastError;
+  }
+
+  get reason(): ModelFailureReason {
+    return this.failures[this.failures.length - 1].reason;
+  }
+
+  // Compact form for logs: `คีย์#1=throttled, คีย์#2=throttled`.
+  get summary(): string {
+    return this.failures.map((f) => `คีย์#${f.key}=${f.reason}`).join(', ');
+  }
+}
+
+// Runs `run` with the first key and, if that key is exhausted or rejected, again
+// with the next one. One key means one attempt, exactly as before.
+export async function withApiKeyFallback<T, K>(
+  keys: readonly K[],
+  run: (key: K) => Promise<T>
 ): Promise<T> {
-  const attempts = Math.max(1, keyCount);
+  if (keys.length === 0) {
+    throw new Error('ไม่พบ GEMINI_API_KEY ในระบบ กรุณาตรวจสอบการตั้งค่า Secrets');
+  }
+  const failures: ApiKeyFailure[] = [];
   let lastError: unknown;
-  for (let index = 0; index < attempts; index += 1) {
+  for (const [index, key] of keys.entries()) {
     try {
-      return await run(index, index + 1);
+      return await run(key);
     } catch (error) {
       lastError = error;
-      if (index + 1 >= attempts || !apiKeyRotationAllowed(error)) throw error;
-      console.warn(`[gemini] key=#${index + 1} failed, retrying on key=#${index + 2}`);
+      const { reason } = describeModelFailure(error);
+      failures.push({ key: index + 1, reason });
+      // The last key, or a failure another key cannot fix: stop here.
+      if (index + 1 >= keys.length || !apiKeyRotationAllowed(error)) break;
+      console.warn(`[gemini] key=#${index + 1} failed (${reason}), trying key=#${index + 2}`);
     }
   }
-  throw lastError;
+  // A single failed key keeps its own error, so one-key setups are unchanged.
+  throw failures.length > 1 ? new ApiKeyChainError(failures, lastError) : lastError;
 }
 
 // Only 429/503 may switch to a non-grounded retry; any other error must surface
@@ -380,6 +438,10 @@ export function groundingFallback(kind: keyof typeof GROUNDING_NOTICES, error: u
 }
 
 export function formatGeminiError(error: unknown): { status: number; message: string } {
+  if (error instanceof ApiKeyChainError) {
+    const base = formatGeminiError(error.lastError);
+    return { status: base.status, message: `${base.message} (${error.summary})` };
+  }
   if (error instanceof ModelChainError) {
     // Keep the same status the last failure would have produced, but say which
     // model failed and why instead of one opaque message.

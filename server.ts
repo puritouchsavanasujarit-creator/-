@@ -96,15 +96,13 @@ function getAiClient(): GoogleGenAI {
   return {
     models: {
       generateContent: (params: any) =>
-        withApiKeyFallback(clients.length, (index) =>
-          clients[index].models.generateContent(params)
-        ),
+        withApiKeyFallback(clients, (client) => client.models.generateContent(params)),
     },
     chats: {
       create: (params: any) => ({
         sendMessage: (message: any) =>
-          withApiKeyFallback(clients.length, (index) =>
-            clients[index].chats.create(params).sendMessage(message)
+          withApiKeyFallback(clients, (client) =>
+            client.chats.create(params).sendMessage(message)
           ),
       }),
     },
