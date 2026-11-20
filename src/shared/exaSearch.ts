@@ -30,7 +30,7 @@ export class ExaUnconfiguredError extends Error {}
 // spike of timeouts or auth failures is visible in the logs.
 function logExaFailure(
   query: string,
-  reason: 'timeout' | 'not_configured' | 'failed',
+  reason: 'timeout' | 'not_configured' | 'empty' | 'failed',
   error: unknown
 ): void {
   const message = error instanceof Error ? error.message : String(error);
@@ -154,7 +154,8 @@ export async function searchWebSources(
   try {
     const { results } = await searchWeb(query, numResults, apiKey);
     if (results.length === 0) {
-      logExaFailure(query, 'failed', new Error('Exa returned no results'));
+      // Exa answered fine, it just had nothing to cite: not a failure.
+      logExaFailure(query, 'empty', new Error('Exa returned no results'));
     }
     return results.map((item) => ({ title: item.title, uri: item.url }));
   } catch (error) {
