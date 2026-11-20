@@ -27,15 +27,18 @@ export class ExaTimeoutError extends Error {}
 export class ExaUnconfiguredError extends Error {}
 
 // Server-side signal for how often the backup reference links break, so a
-// spike of timeouts or auth failures is visible in the logs.
+// spike of timeouts or auth failures is visible in the logs. An empty result
+// set is not a broken fallback, so it gets its own wording.
 function logExaFailure(
   query: string,
   reason: 'timeout' | 'not_configured' | 'empty' | 'failed',
   error: unknown
 ): void {
   const message = error instanceof Error ? error.message : String(error);
+  const headline =
+    reason === 'empty' ? 'no backup sources found' : 'fallback sources unavailable';
   console.warn(
-    `[exa] fallback sources unavailable reason=${reason} query="${query.slice(0, 80)}" message=${message}`
+    `[exa] ${headline} reason=${reason} query="${query.slice(0, 80)}" message=${message}`
   );
 }
 
