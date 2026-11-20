@@ -298,9 +298,19 @@ export const EXA_FALLBACK_NOTICE =
 // Returns the fields to add to a non-grounded answer, or rethrows errors that
 // must not be masked by a retry.
 export function groundingFallback(kind: keyof typeof GROUNDING_NOTICES, error: unknown) {
+  // A chain error carries its reasons structurally: its message is a summary and
+  // its details are truncated, so the 429 text that caused the failure may not
+  // survive. Read the reasons instead of hoping the words are still there.
+  const reasons =
+    error instanceof ModelChainError ? error.attempts.map((attempt) => attempt.reason) : [];
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  const exhausted = message.includes('429') || message.includes('resource_exhausted');
+  const exhausted =
+    reasons.includes('throttled') ||
+    message.includes('429') ||
+    message.includes('resource_exhausted');
   const unavailable =
+    reasons.includes('unavailable') ||
+    reasons.includes('overloaded') ||
     message.includes('503') ||
     message.includes('unavailable') ||
     message.includes('overloaded') ||
