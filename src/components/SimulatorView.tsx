@@ -103,6 +103,48 @@ function getCurrentTimeLabel(): string {
   return now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
 }
 
+type DifficultyFilter = 'all' | TrainingScenario['difficulty'];
+
+const DIFFICULTY_META: Record<
+  TrainingScenario['difficulty'],
+  {
+    label: string;
+    englishLabel: string;
+    level: 1 | 2 | 3;
+    badgeClass: string;
+    activeBarClass: string;
+    inactiveBarClass: string;
+  }
+> = {
+  พื้นฐาน: {
+    label: 'พื้นฐาน',
+    englishLabel: 'Easy',
+    level: 1,
+    badgeClass:
+      'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/80',
+    activeBarClass: 'bg-emerald-600 dark:bg-emerald-400',
+    inactiveBarClass: 'bg-emerald-200 dark:bg-emerald-900',
+  },
+  กลาง: {
+    label: 'ปานกลาง',
+    englishLabel: 'Medium',
+    level: 2,
+    badgeClass:
+      'bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800/80',
+    activeBarClass: 'bg-amber-500 dark:bg-amber-400',
+    inactiveBarClass: 'bg-amber-200 dark:bg-amber-900',
+  },
+  ท้าทาย: {
+    label: 'ท้าทาย',
+    englishLabel: 'Hard',
+    level: 3,
+    badgeClass:
+      'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/80',
+    activeBarClass: 'bg-rose-600 dark:bg-rose-400',
+    inactiveBarClass: 'bg-rose-200 dark:bg-rose-900',
+  },
+};
+
 export function SimulatorView({
   selectedScenarioId,
   onSelectScenarioId,
@@ -129,6 +171,7 @@ export function SimulatorView({
   const [evaluation, setEvaluation] = useState<SessionEvaluation | null>(null);
 
   const [companionTab, setCompanionTab] = useState<CompanionTab>('coach');
+  const [difficultyFilter, setDifficultyFilter] = useState<DifficultyFilter>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [scriptSearch, setScriptSearch] = useState('');
   const [scriptCategoryFilter, setScriptCategoryFilter] = useState('ทั้งหมด');
@@ -793,7 +836,7 @@ export function SimulatorView({
     <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-6 space-y-5">
       {/* Scenario Selector Strip */}
       <section aria-label="เลือกสถานการณ์ฝึกซ้อม">
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-3">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-3 mb-3">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
               ห้องจำลองตอบแชทลูกค้า (Chat Roleplay Studio)
@@ -802,21 +845,53 @@ export function SimulatorView({
               ฝึกตอบแชทตาม Flow การขายจริง พร้อม AI สวมบทบาทลูกค้าและโค้ชตรวจคำตอบแบบเรียลไทม์
             </p>
           </div>
-          <div className="text-xs text-slate-500 dark:text-slate-400 font-mono-num shrink-0">
-            ฝึกสำเร็จแล้ว {completedScenarioIds.length}/{TRAINING_SCENARIOS.length} เคส
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <div
+              role="group"
+              aria-label="กรองระดับความยาก"
+              className="inline-flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg"
+            >
+              {(
+                [
+                  { id: 'all', label: 'ทั้งหมด' },
+                  { id: 'พื้นฐาน', label: 'Easy' },
+                  { id: 'กลาง', label: 'Medium' },
+                  { id: 'ท้าทาย', label: 'Hard' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setDifficultyFilter(opt.id)}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                    difficultyFilter === opt.id
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 font-mono-num">
+              ฝึกสำเร็จแล้ว {completedScenarioIds.length}/{TRAINING_SCENARIOS.length} เคส
+            </div>
           </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {TRAINING_SCENARIOS.map((item) => {
+          {TRAINING_SCENARIOS.filter(
+            (item) => difficultyFilter === 'all' || item.difficulty === difficultyFilter
+          ).map((item) => {
             const isSelected = item.id === scenario.id;
             const isDone = completedScenarioIds.includes(item.id);
+            const diff = DIFFICULTY_META[item.difficulty];
             return (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => onSelectScenarioId(item.id)}
-                className={`text-left p-3.5 rounded-xl border transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-emerald-600 ${
+                className={`text-left p-3.5 rounded-xl border transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-emerald-600 flex flex-col justify-between gap-2.5 ${
                   isSelected
                     ? 'bg-white dark:bg-slate-900 border-emerald-600 dark:border-emerald-500 ring-1 ring-emerald-600 dark:ring-emerald-500 shadow-xs'
                     : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
@@ -833,14 +908,40 @@ export function SimulatorView({
                     />
                   )}
                 </div>
-                <div className="mt-1.5 text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-1.5">
-                  <span>{item.channel}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>ระดับ{item.difficulty}</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="font-mono-num">
-                    {item.isUpcountry ? 'ต่างจังหวัด' : `${item.distanceKm} กม.`}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[11px] font-semibold ${diff.badgeClass}`}
+                    title={`ระดับ${diff.label} (${diff.englishLabel})`}
+                  >
+                    <span className="inline-flex items-end gap-0.5 h-2.5" aria-hidden="true">
+                      <span
+                        className={`w-1 h-1 rounded-[1px] ${
+                          diff.level >= 1 ? diff.activeBarClass : diff.inactiveBarClass
+                        }`}
+                      />
+                      <span
+                        className={`w-1 h-1.5 rounded-[1px] ${
+                          diff.level >= 2 ? diff.activeBarClass : diff.inactiveBarClass
+                        }`}
+                      />
+                      <span
+                        className={`w-1 h-2.5 rounded-[1px] ${
+                          diff.level >= 3 ? diff.activeBarClass : diff.inactiveBarClass
+                        }`}
+                      />
+                    </span>
+                    <span>
+                      {diff.label} · {diff.englishLabel}
+                    </span>
                   </span>
+
+                  <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-x-1.5">
+                    <span>{item.channel}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-mono-num">
+                      {item.isUpcountry ? 'ต่างจังหวัด' : `${item.distanceKm} กม.`}
+                    </span>
+                  </div>
                 </div>
               </button>
             );
