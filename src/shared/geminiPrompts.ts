@@ -45,6 +45,9 @@ export function modelChainStartingWith(preferred: string): readonly string[] {
 export const THINKING_LEVELS = {
   chat: 'LOW',
   hint: 'MINIMAL',
+  // Search answers are short summaries, so thinking only adds latency. LOW is
+  // used because MINIMAL is rejected by some models in the chain.
+  search: 'LOW',
   evaluation: 'MEDIUM',
   mentor: 'LOW',
 } as const;
@@ -57,6 +60,11 @@ const RETRY_DELAY_MS = 600;
 // A slow model is as unavailable as a throttled one: after this long the request
 // moves to the next model instead of waiting for the primary to answer.
 export const MODEL_TIMEOUT_MS = 12_000;
+
+// Search answers are a couple of sentences, so a model that has not answered in
+// a few seconds is slower than switching. Keeps one stalled model from spending
+// the whole request budget before the backup model is tried.
+export const SEARCH_MODEL_TIMEOUT_MS = 6_000;
 
 export class ModelTimeoutError extends Error {
   constructor(timeoutMs: number) {

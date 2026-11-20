@@ -21,6 +21,7 @@ import {
   groundingFallback,
   modelChainStartingWith,
   parseGeminiJson,
+  SEARCH_MODEL_TIMEOUT_MS,
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
 import type { ChatMessageInput, MentorHistoryItem } from './src/shared/geminiPrompts.ts';
@@ -200,6 +201,7 @@ async function handleMentorChat(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleToolsSearch(request: Request, env: Env): Promise<Response> {
+  const startedAt = Date.now();
   try {
     const { query } = (await request.json()) as { query: string };
     if (!query || !query.trim()) {
@@ -209,11 +211,15 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
     const body = {
       contents: [{ role: 'user', parts: [{ text: query.trim() }] }],
       systemInstruction: { parts: [{ text: buildSearchSystemInstruction() }] },
+      generationConfig: { thinkingConfig: { thinkingLevel: THINKING_LEVELS.search } },
     };
 
+    const groundedStartedAt = Date.now();
     try {
-      const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-        generate(env, model, { ...body, tools: [{ googleSearch: {} }] })
+      const data = await withModelFallback(
+        GEMINI_MODEL_CHAIN,
+        (model) => generate(env, model, { ...body, tools: [{ googleSearch: {} }] }),
+        SEARCH_MODEL_TIMEOUT_MS
       );
 
       return json({
@@ -225,10 +231,22 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
       // Grounding quota is exhausted: answer from model knowledge and attach
       // backup reference links from Exa when it is configured.
       const fallback = groundingFallback('search', groundingError);
+      const fallbackStartedAt = Date.now();
       const [data, sources] = await Promise.all([
-        withModelFallback(GEMINI_MODEL_CHAIN, (model) => generate(env, model, body)),
+        withModelFallback(
+          GEMINI_MODEL_CHAIN,
+          (model) => generate(env, model, body),
+          SEARCH_MODEL_TIMEOUT_MS
+        ),
         searchWebSources(query.trim(), env.EXA_API_KEY),
       ]);
+
+      // Where the fallback time goes, so a slow phase is visible in the logs.
+      console.log(
+        `[search] grounding=${fallback.groundingStatus} grounded_ms=${
+          fallbackStartedAt - groundedStartedAt
+        } fallback_ms=${Date.now() - fallbackStartedAt} total_ms=${Date.now() - startedAt}`
+      );
 
       return json({
         answerMarkdown: readText(data),

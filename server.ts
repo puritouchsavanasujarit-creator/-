@@ -27,6 +27,7 @@ import {
   groundingFallback,
   modelChainStartingWith,
   parseGeminiJson,
+  SEARCH_MODEL_TIMEOUT_MS,
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
 import type {
@@ -248,6 +249,7 @@ async function createApp() {
 
   // Google Search Grounding for live fruit seasonality, etiquette, hospital delivery info
   app.post('/api/tools/search', async (req: Request, res: Response) => {
+    const startedAt = Date.now();
     try {
       const { query } = req.body as { query: string };
       if (!query || !query.trim()) {
@@ -256,16 +258,21 @@ async function createApp() {
       }
 
       const ai = getAiClient();
+      const groundedStartedAt = Date.now();
       try {
-        const response = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-          ai.models.generateContent({
-            model,
-            contents: query.trim(),
-            config: {
-              systemInstruction: buildSearchSystemInstruction(),
-              tools: [{ googleSearch: {} }],
-            },
-          })
+        const response = await withModelFallback(
+          GEMINI_MODEL_CHAIN,
+          (model) =>
+            ai.models.generateContent({
+              model,
+              contents: query.trim(),
+              config: {
+                systemInstruction: buildSearchSystemInstruction(),
+                thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.search] },
+                tools: [{ googleSearch: {} }],
+              },
+            }),
+          SEARCH_MODEL_TIMEOUT_MS
         );
 
         res.json({
@@ -278,16 +285,30 @@ async function createApp() {
         // Grounding quota is exhausted: answer without live sources and attach
         // backup reference links from Exa when it is configured.
         const fallback = groundingFallback('search', groundingError);
+        const fallbackStartedAt = Date.now();
         const [response, sources] = await Promise.all([
-          withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-            ai.models.generateContent({
-              model,
-              contents: query.trim(),
-              config: { systemInstruction: buildSearchSystemInstruction() },
-            })
+          withModelFallback(
+            GEMINI_MODEL_CHAIN,
+            (model) =>
+              ai.models.generateContent({
+                model,
+                contents: query.trim(),
+                config: {
+                  systemInstruction: buildSearchSystemInstruction(),
+                  thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.search] },
+                },
+              }),
+            SEARCH_MODEL_TIMEOUT_MS
           ),
           searchWebSources(query.trim()),
         ]);
+
+        // Where the fallback time goes, so a slow phase is visible in the logs.
+        console.log(
+          `[search] grounding=${fallback.groundingStatus} grounded_ms=${
+            fallbackStartedAt - groundedStartedAt
+          } fallback_ms=${Date.now() - fallbackStartedAt} total_ms=${Date.now() - startedAt}`
+        );
 
         res.json({
           answerMarkdown: response.text ?? '',
