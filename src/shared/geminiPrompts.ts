@@ -339,10 +339,11 @@ export class ApiKeyChainError extends Error {
   readonly lastError: unknown;
 
   constructor(failures: ApiKeyFailure[], lastError: unknown) {
+    const { detail } = describeModelFailure(lastError);
     super(
       `ทุกคีย์ที่ลองใช้งานไม่ได้ ลองแล้ว ${failures
         .map((f) => `คีย์#${f.key}: ${f.reason}`)
-        .join(', ')}`
+        .join(', ')}${detail ? ` — ${detail}` : ''}`
     );
     this.name = 'ApiKeyChainError';
     this.failures = failures;
@@ -382,8 +383,10 @@ export async function withApiKeyFallback<T, K>(
       console.warn(`[gemini] key=#${index + 1} failed (${reason}), trying key=#${index + 2}`);
     }
   }
-  // A single failed key keeps its own error, so one-key setups are unchanged.
-  throw failures.length > 1 ? new ApiKeyChainError(failures, lastError) : lastError;
+  // Name the key slots whenever the failure was about a key or a key switch was
+  // tried; a genuine request error keeps its own message untouched.
+  const keyLevel = failures.length > 1 || apiKeyRotationAllowed(lastError);
+  throw keyLevel ? new ApiKeyChainError(failures, lastError) : lastError;
 }
 
 // Only 429/503 may switch to a non-grounded retry; any other error must surface
