@@ -75,6 +75,10 @@ export const CHAT_MODEL_TIMEOUT_MS = 6_000;
 // Mentor answers are longer prose, so they get a little more room than a turn.
 export const MENTOR_MODEL_TIMEOUT_MS = 8_000;
 
+// A grounded answer that a model has not produced in 6s is not worth 12 more:
+// waiting the full backup timeout only delays the degrade that follows it.
+export const GROUNDING_BACKUP_TIMEOUT_MS = 6_000;
+
 // Degraded mode already spent a round trip on the grounded call, and the models
 // it is about to reuse just failed there. Cut the first one short and keep the
 // backup at MODEL_TIMEOUT_MS: same two models, same backup chance, seconds less.
@@ -290,6 +294,12 @@ export function formatTranscript(messages: ChatMessageInput[]): string {
 // Grounding (Search/Maps) has its own quota, separate from normal generation.
 // Only 429/503 may switch to a non-grounded retry; any other error must surface
 // unchanged instead of being masked by a second call.
+export const GROUNDING_TIMEOUT_NOTICES = {
+  search:
+    'ตอนนี้ระบบค้นหาเว็บแบบเรียลไทม์ตอบช้าเกินกำหนด คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีแหล่งอ้างอิง',
+  maps: 'ตอนนี้ระบบค้นหาสถานที่บน Google Maps ตอบช้าเกินกำหนด คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีข้อมูลสถานที่จริง',
+} as const;
+
 export const GROUNDING_NOTICES = {
   search:
     'ตอนนี้ระบบค้นหาเว็บแบบเรียลไทม์ใช้งานไม่ได้ชั่วคราว (โควตาการค้นหาเว็บเต็ม) คำตอบด้านล่างจึงมาจากความรู้ของโมเดลโดยไม่มีแหล่งอ้างอิง',
@@ -309,6 +319,9 @@ export function groundingFallback(kind: keyof typeof GROUNDING_NOTICES, error: u
   const reasons =
     error instanceof ModelChainError ? error.attempts.map((attempt) => attempt.reason) : [];
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  // A grounded call that hangs is as unusable as one that is throttled: it must
+  // degrade too, otherwise the request pays both waits and still returns 500.
+  const timedOut = reasons.includes('timeout') || message.includes('model_timeout');
   const exhausted =
     reasons.includes('throttled') ||
     message.includes('429') ||
@@ -320,12 +333,13 @@ export function groundingFallback(kind: keyof typeof GROUNDING_NOTICES, error: u
     message.includes('unavailable') ||
     message.includes('overloaded') ||
     message.includes('high demand');
-  if (!exhausted && !unavailable) throw error;
+  if (!exhausted && !unavailable && !timedOut) throw error;
 
+  const byQuota = exhausted || unavailable;
   return {
     grounded: false as const,
-    notice: GROUNDING_NOTICES[kind],
-    groundingStatus: (exhausted ? 429 : 503) as 429 | 503,
+    notice: byQuota ? GROUNDING_NOTICES[kind] : GROUNDING_TIMEOUT_NOTICES[kind],
+    groundingStatus: (exhausted ? 429 : unavailable ? 503 : 504) as 429 | 503 | 504,
   };
 }
 
