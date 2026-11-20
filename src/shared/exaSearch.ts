@@ -17,7 +17,10 @@ export interface ExaSource {
   uri: string;
 }
 
+// Exa's recommended search request, plus the fields this product needs. Raw
+// HTTP instead of the exa-js SDK: the Worker bundle sits near its size ceiling.
 const EXA_API_URL = 'https://api.exa.ai/search';
+// Intentional product cap: reference links stay short so answers stay small.
 const DEFAULT_NUM_RESULTS = 5;
 const MAX_NUM_RESULTS = 10;
 // Exa is a backup source, so it must never hold an answer hostage.
@@ -42,6 +45,10 @@ function logExaFailure(
   );
 }
 
+// The fallback search is one step of answering a question, so Exa gets that goal.
+const EXA_FALLBACK_OBJECTIVE =
+  'Pick pages a Thai-language chat answer can cite as reference links: prefer specific, authoritative pages that answer the question directly, and exclude homepages, index pages, ads and content farms.';
+
 // The Worker passes env.EXA_API_KEY; the express server falls back to process.env.
 function getExaApiKey(override?: string): string | undefined {
   const key = (
@@ -57,7 +64,8 @@ export function isExaConfigured(apiKey?: string): boolean {
 export async function searchWeb(
   query: string,
   numResults: number = DEFAULT_NUM_RESULTS,
-  apiKeyOverride?: string
+  apiKeyOverride?: string,
+  objective?: string
 ): Promise<ExaSearchResponse> {
   const trimmedQuery = query.trim();
   if (!trimmedQuery) {
@@ -88,12 +96,8 @@ export async function searchWeb(
       body: JSON.stringify({
         query: trimmedQuery,
         numResults: count,
-        type: 'auto',
-        contents: {
-          highlights: {
-            maxCharacters: 600,
-          },
-        },
+        contents: { highlights: true },
+        ...(objective ? { objective } : {}),
       }),
       signal: controller.signal,
     });
@@ -155,7 +159,7 @@ export async function searchWebSources(
   numResults: number = DEFAULT_NUM_RESULTS
 ): Promise<ExaSource[]> {
   try {
-    const { results } = await searchWeb(query, numResults, apiKey);
+    const { results } = await searchWeb(query, numResults, apiKey, EXA_FALLBACK_OBJECTIVE);
     if (results.length === 0) {
       // Exa answered fine, it just had nothing to cite: not a failure.
       logExaFailure(query, 'empty', new Error('Exa returned no results'));
