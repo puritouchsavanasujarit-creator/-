@@ -23,6 +23,22 @@ const MAX_NUM_RESULTS = 10;
 // Exa is a backup source, so it must never hold an answer hostage.
 const EXA_TIMEOUT_MS = 6000;
 
+export class ExaTimeoutError extends Error {}
+export class ExaUnconfiguredError extends Error {}
+
+// Server-side signal for how often the backup reference links break, so a
+// spike of timeouts or auth failures is visible in the logs.
+function logExaFailure(
+  query: string,
+  reason: 'timeout' | 'not_configured' | 'failed',
+  error: unknown
+): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(
+    `[exa] fallback sources unavailable reason=${reason} query="${query.slice(0, 80)}" message=${message}`
+  );
+}
+
 // The Worker passes env.EXA_API_KEY; the express server falls back to process.env.
 function getExaApiKey(override?: string): string | undefined {
   const key = (
@@ -47,7 +63,9 @@ export async function searchWeb(
 
   const apiKey = getExaApiKey(apiKeyOverride);
   if (!apiKey) {
-    throw new Error('ไม่พบ EXA_API_KEY ในระบบ กรุณาตั้งค่า environment variable');
+    throw new ExaUnconfiguredError(
+      'ไม่พบ EXA_API_KEY ในระบบ กรุณาตั้งค่า environment variable'
+    );
   }
 
   const count = Number.isFinite(numResults)
@@ -78,7 +96,9 @@ export async function searchWeb(
     });
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error(`การค้นหาเว็บด้วย Exa ใช้เวลานานเกิน ${EXA_TIMEOUT_MS / 1000} วินาที`);
+      throw new ExaTimeoutError(
+        `การค้นหาเว็บด้วย Exa ใช้เวลานานเกิน ${EXA_TIMEOUT_MS / 1000} วินาที`
+      );
     }
     throw error;
   } finally {
@@ -133,8 +153,18 @@ export async function searchWebSources(
 ): Promise<ExaSource[]> {
   try {
     const { results } = await searchWeb(query, numResults, apiKey);
+    if (results.length === 0) {
+      logExaFailure(query, 'failed', new Error('Exa returned no results'));
+    }
     return results.map((item) => ({ title: item.title, uri: item.url }));
-  } catch {
+  } catch (error) {
+    const reason =
+      error instanceof ExaTimeoutError
+        ? 'timeout'
+        : error instanceof ExaUnconfiguredError
+          ? 'not_configured'
+          : 'failed';
+    logExaFailure(query, reason, error);
     return [];
   }
 }
