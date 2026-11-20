@@ -66,6 +66,14 @@ export const MODEL_TIMEOUT_MS = 12_000;
 // the whole request budget before the backup model is tried.
 export const SEARCH_MODEL_TIMEOUT_MS = 6_000;
 
+// One practice turn is a short JSON reply, so a model that is still silent after
+// a few seconds is slower than switching to the backup model. The backup still
+// gets MODEL_TIMEOUT_MS, so switching never loses the fallback.
+export const CHAT_MODEL_TIMEOUT_MS = 6_000;
+
+// Mentor answers are longer prose, so they get a little more room than a turn.
+export const MENTOR_MODEL_TIMEOUT_MS = 8_000;
+
 export class ModelTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`MODEL_TIMEOUT after ${timeoutMs}ms`);
@@ -99,16 +107,21 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
+// The first model may be cut short so a stall turns into a switch sooner, while
+// the backup keeps the full budget: the fallback stays exactly as reachable as
+// before instead of inheriting the shorter wait.
 export async function withModelFallback<T>(
   models: readonly string[],
   generate: (model: string) => Promise<T>,
-  timeoutMs: number = MODEL_TIMEOUT_MS
+  timeoutMs: number = MODEL_TIMEOUT_MS,
+  backupTimeoutMs: number = timeoutMs
 ): Promise<T> {
   let lastError: unknown;
-  for (const model of models) {
+  for (const [index, model] of models.entries()) {
+    const attemptTimeoutMs = index === 0 ? timeoutMs : backupTimeoutMs;
     for (let attempt = 0; attempt <= RETRIES_PER_MODEL; attempt += 1) {
       try {
-        return await withTimeout(generate(model), timeoutMs);
+        return await withTimeout(generate(model), attemptTimeoutMs);
       } catch (error) {
         lastError = error;
         const action = classifyFailure(error);

@@ -4,6 +4,9 @@ import {
   GEMINI_MODEL_CHAIN,
   GEMINI_MODELS,
   HINT_SCHEMA,
+  CHAT_MODEL_TIMEOUT_MS,
+  MENTOR_MODEL_TIMEOUT_MS,
+  MODEL_TIMEOUT_MS,
   THINKING_LEVELS,
   buildChatTurnPrompt,
   buildEvaluationPrompt,
@@ -95,8 +98,11 @@ async function handleChatTurn(request: Request, env: Env): Promise<Response> {
         responseSchema: CHAT_TURN_SCHEMA,
       },
     };
-    const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-      generate(env, model, body)
+    const data = await withModelFallback(
+      GEMINI_MODEL_CHAIN,
+      (model) => generate(env, model, body),
+      CHAT_MODEL_TIMEOUT_MS,
+      MODEL_TIMEOUT_MS
     );
 
     return json(parseGeminiJson(readText(data)));
@@ -189,8 +195,11 @@ async function handleMentorChat(request: Request, env: Env): Promise<Response> {
         thinkingConfig: { thinkingLevel: THINKING_LEVELS.mentor },
       },
     };
-    const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-      generate(env, model, body)
+    const data = await withModelFallback(
+      GEMINI_MODEL_CHAIN,
+      (model) => generate(env, model, body),
+      MENTOR_MODEL_TIMEOUT_MS,
+      MODEL_TIMEOUT_MS
     );
 
     return json({ reply: readText(data) });

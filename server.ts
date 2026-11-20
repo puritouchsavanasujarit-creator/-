@@ -27,6 +27,9 @@ import {
   groundingFallback,
   modelChainStartingWith,
   parseGeminiJson,
+  CHAT_MODEL_TIMEOUT_MS,
+  MENTOR_MODEL_TIMEOUT_MS,
+  MODEL_TIMEOUT_MS,
   SEARCH_MODEL_TIMEOUT_MS,
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
@@ -128,7 +131,9 @@ async function createApp() {
               responseMimeType: 'application/json',
               responseSchema: CHAT_TURN_SCHEMA as any,
             },
-          })
+          }),
+        CHAT_MODEL_TIMEOUT_MS,
+        MODEL_TIMEOUT_MS
       );
 
       res.json(parseGeminiJson(response.text));
@@ -239,7 +244,7 @@ async function createApp() {
           },
         });
         return chat.sendMessage({ message: message.trim() });
-      });
+      }, MENTOR_MODEL_TIMEOUT_MS, MODEL_TIMEOUT_MS);
       res.json({ reply: response.text ?? '' });
     } catch (error) {
       const formatted = formatGeminiError(error);
