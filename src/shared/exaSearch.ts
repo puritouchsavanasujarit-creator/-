@@ -20,6 +20,8 @@ export interface ExaSource {
 const EXA_API_URL = 'https://api.exa.ai/search';
 const DEFAULT_NUM_RESULTS = 5;
 const MAX_NUM_RESULTS = 10;
+// Exa is a backup source, so it must never hold an answer hostage.
+const EXA_TIMEOUT_MS = 6000;
 
 // The Worker passes env.EXA_API_KEY; the express server falls back to process.env.
 function getExaApiKey(override?: string): string | undefined {
@@ -52,23 +54,36 @@ export async function searchWeb(
     ? Math.min(MAX_NUM_RESULTS, Math.max(1, Math.floor(numResults)))
     : DEFAULT_NUM_RESULTS;
 
-  const response = await fetch(EXA_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      query: trimmedQuery,
-      numResults: count,
-      type: 'auto',
-      contents: {
-        highlights: {
-          maxCharacters: 600,
-        },
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), EXA_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(EXA_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
       },
-    }),
-  });
+      body: JSON.stringify({
+        query: trimmedQuery,
+        numResults: count,
+        type: 'auto',
+        contents: {
+          highlights: {
+            maxCharacters: 600,
+          },
+        },
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`การค้นหาเว็บด้วย Exa ใช้เวลานานเกิน ${EXA_TIMEOUT_MS / 1000} วินาที`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const data = (await response.json().catch(() => ({}))) as {
     error?: string | { message?: string };
