@@ -75,10 +75,6 @@ export const CHAT_MODEL_TIMEOUT_MS = 6_000;
 // Mentor answers are longer prose, so they get a little more room than a turn.
 export const MENTOR_MODEL_TIMEOUT_MS = 8_000;
 
-// A grounded answer that a model has not produced in 6s is not worth 12 more:
-// waiting the full backup timeout only delays the degrade that follows it.
-export const GROUNDING_BACKUP_TIMEOUT_MS = 6_000;
-
 // Degraded mode already spent a round trip on the grounded call, and the models
 // it is about to reuse just failed there. Cut the first one short and keep the
 // backup at MODEL_TIMEOUT_MS: same two models, same backup chance, seconds less.

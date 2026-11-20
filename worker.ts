@@ -6,7 +6,6 @@ import {
   HINT_SCHEMA,
   CHAT_MODEL_TIMEOUT_MS,
   DEGRADED_MODEL_TIMEOUT_MS,
-  GROUNDING_BACKUP_TIMEOUT_MS,
   MENTOR_MODEL_TIMEOUT_MS,
   MODEL_TIMEOUT_MS,
   THINKING_LEVELS,
@@ -260,7 +259,7 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
         GEMINI_MODEL_CHAIN,
         (model) => generate(env, model, { ...body, tools: [{ googleSearch: {} }] }),
         QUICK_MODEL_TIMEOUT_MS,
-        GROUNDING_BACKUP_TIMEOUT_MS,
+        MODEL_TIMEOUT_MS,
         'search'
       );
       console.log(
@@ -356,7 +355,7 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
           ...buildMapsToolConfig(latLng),
         }),
         QUICK_MODEL_TIMEOUT_MS,
-        GROUNDING_BACKUP_TIMEOUT_MS,
+        MODEL_TIMEOUT_MS,
         'maps'
       );
       console.log(

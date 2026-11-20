@@ -29,7 +29,6 @@ import {
   parseGeminiJson,
   CHAT_MODEL_TIMEOUT_MS,
   DEGRADED_MODEL_TIMEOUT_MS,
-  GROUNDING_BACKUP_TIMEOUT_MS,
   MENTOR_MODEL_TIMEOUT_MS,
   MODEL_TIMEOUT_MS,
   QUICK_MODEL_TIMEOUT_MS,
@@ -307,7 +306,7 @@ async function createApp() {
               },
             }),
           QUICK_MODEL_TIMEOUT_MS,
-          GROUNDING_BACKUP_TIMEOUT_MS,
+          MODEL_TIMEOUT_MS,
           'search'
         );
         console.log(
@@ -414,7 +413,7 @@ async function createApp() {
             config: { tools: [{ googleMaps: {} }], ...buildMapsToolConfig(latLng) },
           }),
           QUICK_MODEL_TIMEOUT_MS,
-          GROUNDING_BACKUP_TIMEOUT_MS,
+          MODEL_TIMEOUT_MS,
           'maps'
         );
         console.log(
