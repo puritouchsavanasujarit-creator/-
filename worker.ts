@@ -74,6 +74,7 @@ function readText(data: any): string {
 }
 
 async function handleChatTurn(request: Request, env: Env): Promise<Response> {
+  const startedAt = Date.now();
   try {
     const { scenarioId, messages, currentStage } = (await request.json()) as {
       scenarioId: string;
@@ -98,11 +99,16 @@ async function handleChatTurn(request: Request, env: Env): Promise<Response> {
         responseSchema: CHAT_TURN_SCHEMA,
       },
     };
+    const modelStartedAt = Date.now();
     const data = await withModelFallback(
       GEMINI_MODEL_CHAIN,
       (model) => generate(env, model, body),
       CHAT_MODEL_TIMEOUT_MS,
-      MODEL_TIMEOUT_MS
+      MODEL_TIMEOUT_MS,
+      'chat/turn'
+    );
+    console.log(
+      `[chat/turn] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
     );
 
     return json(parseGeminiJson(readText(data)));
@@ -113,6 +119,7 @@ async function handleChatTurn(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleChatHint(request: Request, env: Env): Promise<Response> {
+  const startedAt = Date.now();
   try {
     const { scenarioId, messages, currentStage } = (await request.json()) as {
       scenarioId: string;
@@ -123,6 +130,7 @@ async function handleChatHint(request: Request, env: Env): Promise<Response> {
     const scenario = findScenario(scenarioId);
     if (!scenario) return json({ error: 'ไม่พบสถานการณ์ฝึกซ้อมที่ระบุ' }, 400);
 
+    const modelStartedAt = Date.now();
     const data = await withModelFallback(modelChainStartingWith(GEMINI_MODELS.hint), (model) =>
       generate(env, model, {
         contents: [{ role: 'user', parts: [{ text: buildHintPrompt(scenario, messages, currentStage) }] }],
@@ -133,7 +141,11 @@ async function handleChatHint(request: Request, env: Env): Promise<Response> {
         },
       }),
       QUICK_MODEL_TIMEOUT_MS,
-      MODEL_TIMEOUT_MS
+      MODEL_TIMEOUT_MS,
+      'chat/hint'
+    );
+    console.log(
+      `[chat/hint] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
     );
 
     return json(parseGeminiJson(readText(data)));
@@ -144,6 +156,7 @@ async function handleChatHint(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleEvaluate(request: Request, env: Env): Promise<Response> {
+  const startedAt = Date.now();
   try {
     const { scenarioId, messages } = (await request.json()) as {
       scenarioId: string;
@@ -161,11 +174,16 @@ async function handleEvaluate(request: Request, env: Env): Promise<Response> {
         responseSchema: EVALUATION_SCHEMA,
       },
     };
+    const modelStartedAt = Date.now();
     const data = await withModelFallback(
       GEMINI_MODEL_CHAIN,
       (model) => generate(env, model, body),
       QUICK_MODEL_TIMEOUT_MS,
-      MODEL_TIMEOUT_MS
+      MODEL_TIMEOUT_MS,
+      'chat/evaluate'
+    );
+    console.log(
+      `[chat/evaluate] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
     );
 
     return json(parseGeminiJson(readText(data)));
@@ -176,6 +194,7 @@ async function handleEvaluate(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleMentorChat(request: Request, env: Env): Promise<Response> {
+  const startedAt = Date.now();
   try {
     const { history, message, scenarioId } = (await request.json()) as {
       history?: MentorHistoryItem[];
@@ -200,11 +219,16 @@ async function handleMentorChat(request: Request, env: Env): Promise<Response> {
         thinkingConfig: { thinkingLevel: THINKING_LEVELS.mentor },
       },
     };
+    const modelStartedAt = Date.now();
     const data = await withModelFallback(
       GEMINI_MODEL_CHAIN,
       (model) => generate(env, model, body),
       MENTOR_MODEL_TIMEOUT_MS,
-      MODEL_TIMEOUT_MS
+      MODEL_TIMEOUT_MS,
+      'mentor/chat'
+    );
+    console.log(
+      `[mentor/chat] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
     );
 
     return json({ reply: readText(data) });
@@ -234,7 +258,13 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
         GEMINI_MODEL_CHAIN,
         (model) => generate(env, model, { ...body, tools: [{ googleSearch: {} }] }),
         QUICK_MODEL_TIMEOUT_MS,
-        MODEL_TIMEOUT_MS
+        MODEL_TIMEOUT_MS,
+        'search'
+      );
+      console.log(
+        `[search] grounding=200 grounded_ms=${
+          Date.now() - groundedStartedAt
+        } total_ms=${Date.now() - startedAt}`
       );
 
       return json({
@@ -252,7 +282,8 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
           GEMINI_MODEL_CHAIN,
           (model) => generate(env, model, body),
           QUICK_MODEL_TIMEOUT_MS,
-          MODEL_TIMEOUT_MS
+          MODEL_TIMEOUT_MS,
+          'search'
         ),
         searchWebSources(query.trim(), env.EXA_API_KEY),
       ]);
@@ -278,6 +309,7 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
 }
 
 async function handleToolsWebSearch(request: Request, env: Env): Promise<Response> {
+  const startedAt = Date.now();
   try {
     const { query, numResults } = (await request.json()) as {
       query: string;
@@ -287,8 +319,11 @@ async function handleToolsWebSearch(request: Request, env: Env): Promise<Respons
       return json({ error: 'กรุณาระบุคำค้นหา' }, 400);
     }
 
-    return json(await searchWeb(query, numResults, env.EXA_API_KEY));
+    const result = await searchWeb(query, numResults, env.EXA_API_KEY);
+    console.log(`[web-search] total_ms=${Date.now() - startedAt}`);
+    return json(result);
   } catch (error) {
+    console.log(`[web-search] failed total_ms=${Date.now() - startedAt} error=${String(error)}`);
     return json(
       { error: error instanceof Error ? error.message : 'ไม่สามารถค้นหาเว็บด้วย Exa ได้' },
       500
@@ -297,6 +332,7 @@ async function handleToolsWebSearch(request: Request, env: Env): Promise<Respons
 }
 
 async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
+  const startedAt = Date.now();
   try {
     const { query, latLng } = (await request.json()) as {
       query: string;
@@ -309,6 +345,7 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
     const body = { contents: [{ role: 'user', parts: [{ text: buildMapsPrompt(query.trim()) }] }] };
     const chain = modelChainStartingWith(GEMINI_MODELS.maps);
 
+    const groundedStartedAt = Date.now();
     try {
       const data = await withModelFallback(chain, (model) =>
         generate(env, model, {
@@ -317,7 +354,13 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
           ...buildMapsToolConfig(latLng),
         }),
         QUICK_MODEL_TIMEOUT_MS,
-        MODEL_TIMEOUT_MS
+        MODEL_TIMEOUT_MS,
+        'maps'
+      );
+      console.log(
+        `[maps] grounding=200 grounded_ms=${
+          Date.now() - groundedStartedAt
+        } total_ms=${Date.now() - startedAt}`
       );
 
       return json({
@@ -328,11 +371,18 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
     } catch (groundingError) {
       // Maps quota is exhausted: answer without live place data.
       const fallback = groundingFallback('maps', groundingError);
+      const fallbackStartedAt = Date.now();
       const data = await withModelFallback(
         chain,
         (model) => generate(env, model, body),
         QUICK_MODEL_TIMEOUT_MS,
-        MODEL_TIMEOUT_MS
+        MODEL_TIMEOUT_MS,
+        'maps'
+      );
+      console.log(
+        `[maps] grounding=${fallback.groundingStatus} grounded_ms=${
+          fallbackStartedAt - groundedStartedAt
+        } fallback_ms=${Date.now() - fallbackStartedAt} total_ms=${Date.now() - startedAt}`
       );
 
       return json({ answerMarkdown: readText(data), places: [], ...fallback });

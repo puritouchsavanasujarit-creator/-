@@ -82,6 +82,63 @@ export class ModelTimeoutError extends Error {
   }
 }
 
+export type ModelFailureReason = 'timeout' | 'throttled' | 'unavailable' | 'overloaded' | 'error';
+
+export interface ModelAttemptFailure {
+  model: string;
+  attempt: number;
+  timeoutMs: number;
+  reason: ModelFailureReason;
+  detail: string;
+}
+
+const FAILURE_DETAIL_LIMIT = 160;
+
+// Why an attempt failed, in a form that fits a log line and an error message:
+// a timeout reads as "timeout", a quota rejection as "throttled", not both as
+// an opaque 500.
+export function describeModelFailure(error: unknown): { reason: ModelFailureReason; detail: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const detail = message.slice(0, FAILURE_DETAIL_LIMIT);
+  if (error instanceof ModelTimeoutError) return { reason: 'timeout', detail };
+  const lower = message.toLowerCase();
+  if (lower.includes('429') || lower.includes('resource_exhausted')) {
+    return { reason: 'throttled', detail };
+  }
+  if (lower.includes('503') || lower.includes('unavailable')) {
+    return { reason: 'unavailable', detail };
+  }
+  if (lower.includes('high demand') || lower.includes('overloaded')) {
+    return { reason: 'overloaded', detail };
+  }
+  return { reason: 'error', detail };
+}
+
+// Every model in the chain failed: keep each attempt (model, try, reason) so the
+// 500 says which model broke and whether it was a timeout or a throttle.
+export class ModelChainError extends Error {
+  readonly lastError: unknown;
+  readonly attempts: readonly ModelAttemptFailure[];
+
+  constructor(attempts: ModelAttemptFailure[], lastError: unknown) {
+    super(
+      `ทุกโมเดลที่ลองใช้งานไม่ได้ → ${attempts
+        .map(
+          (a) => `${a.model} (ครั้งที่ ${a.attempt}, ${a.timeoutMs}ms): ${a.reason}${a.detail ? ` — ${a.detail}` : ''}`
+        )
+        .join(' | ')}`
+    );
+    this.name = 'ModelChainError';
+    this.attempts = attempts;
+    this.lastError = lastError;
+  }
+
+  // Compact one-line form for logs: `model#try=reason, ...`.
+  get summary(): string {
+    return this.attempts.map((a) => `${a.model}#${a.attempt}=${a.reason}`).join(', ');
+  }
+}
+
 type FailureAction = 'fallback' | 'retry' | 'throw';
 
 // 429/503 cannot serve this model now, so switch models at once. Overload spikes
@@ -111,21 +168,42 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 // The first model may be cut short so a stall turns into a switch sooner, while
 // the backup keeps the full budget: the fallback stays exactly as reachable as
 // before instead of inheriting the shorter wait.
+// `label` is the endpoint tag (`chat/turn`, `maps`, ...), so every model switch
+// is visible in the logs with the model, the try and the reason it failed.
 export async function withModelFallback<T>(
   models: readonly string[],
   generate: (model: string) => Promise<T>,
   timeoutMs: number = MODEL_TIMEOUT_MS,
-  backupTimeoutMs: number = timeoutMs
+  backupTimeoutMs: number = timeoutMs,
+  label?: string
 ): Promise<T> {
+  const startedAt = Date.now();
+  const attempts: ModelAttemptFailure[] = [];
   let lastError: unknown;
   for (const [index, model] of models.entries()) {
     const attemptTimeoutMs = index === 0 ? timeoutMs : backupTimeoutMs;
     for (let attempt = 0; attempt <= RETRIES_PER_MODEL; attempt += 1) {
+      const attemptStartedAt = Date.now();
       try {
-        return await withTimeout(generate(model), attemptTimeoutMs);
+        const result = await withTimeout(generate(model), attemptTimeoutMs);
+        if (label) {
+          console.log(
+            `[${label}] model=${model} attempt=${attempt + 1} ok_ms=${Date.now() - attemptStartedAt}`
+          );
+        }
+        return result;
       } catch (error) {
         lastError = error;
         const action = classifyFailure(error);
+        const { reason, detail } = describeModelFailure(error);
+        attempts.push({ model, attempt: attempt + 1, timeoutMs: attemptTimeoutMs, reason, detail });
+        if (label) {
+          console.warn(
+            `[${label}] model=${model} attempt=${attempt + 1} failed=${reason} after_ms=${
+              Date.now() - attemptStartedAt
+            } detail="${detail}"`
+          );
+        }
         if (action === 'throw') throw error;
         if (action === 'fallback') break;
         if (attempt < RETRIES_PER_MODEL) {
@@ -134,7 +212,14 @@ export async function withModelFallback<T>(
       }
     }
   }
-  throw lastError;
+  if (label) {
+    console.warn(
+      `[${label}] all_models_failed tried=${attempts.length} total_ms=${Date.now() - startedAt} failures=${
+        new ModelChainError(attempts, lastError).summary
+      }`
+    );
+  }
+  throw new ModelChainError(attempts, lastError);
 }
 
 export interface MentorHistoryMessage {
@@ -230,6 +315,15 @@ export function groundingFallback(kind: keyof typeof GROUNDING_NOTICES, error: u
 }
 
 export function formatGeminiError(error: unknown): { status: number; message: string } {
+  if (error instanceof ModelChainError) {
+    // Keep the same status the last failure would have produced, but say which
+    // model failed and why instead of one opaque message.
+    const base = formatGeminiError(error.lastError);
+    return {
+      status: base.status,
+      message: base.status === 500 ? error.message : `${base.message} (${error.summary})`,
+    };
+  }
   const errMsg = error instanceof Error ? error.message : String(error);
   if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('PERMISSION_DENIED') || errMsg.includes('403')) {
     return {
