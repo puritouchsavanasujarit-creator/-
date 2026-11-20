@@ -7,6 +7,8 @@ import {
   CHAT_MODEL_TIMEOUT_MS,
   DEGRADED_MODEL_TIMEOUT_MS,
   MENTOR_MODEL_TIMEOUT_MS,
+  geminiApiKeys,
+  withApiKeyFallback,
   MODEL_TIMEOUT_MS,
   THINKING_LEVELS,
   buildChatTurnPrompt,
@@ -33,6 +35,7 @@ import { searchWeb, searchWebSources } from './src/shared/exaSearch.ts';
 
 interface Env {
   GEMINI_API_KEY?: string;
+  GEMINI_API_KEY_2?: string;
   EXA_API_KEY?: string;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
 }
@@ -47,25 +50,34 @@ function json(data: unknown, status = 200): Response {
 }
 
 async function generate(env: Env, model: string, body: unknown): Promise<any> {
-  const apiKey = env.GEMINI_API_KEY;
-  if (!apiKey) {
+  const keys = geminiApiKeys(env.GEMINI_API_KEY, env.GEMINI_API_KEY_2);
+  if (keys.length === 0) {
     throw new Error('ไม่พบ GEMINI_API_KEY ในระบบ กรุณาตรวจสอบการตั้งค่า Secrets');
   }
-  const response = await fetch(`${API_BASE}/${model}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify(body),
+  // An exhausted key says nothing about the model: retry the same request on the
+  // backup key before letting the model count as failed.
+  return withApiKeyFallback(keys.length, async (index) => {
+    const response = await fetch(`${API_BASE}/${model}:generateContent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': keys[index],
+      },
+      body: JSON.stringify(body),
+    });
+    const data = (await response.json().catch(() => ({}))) as any;
+    if (!response.ok) {
+      const message = data?.error?.message || `Gemini API error ${response.status}`;
+      const status = data?.error?.status ? ` ${data.error.status}` : '';
+      const error = new Error(
+        `${message}${status}${response.status === 429 ? ' RESOURCE_EXHAUSTED' : ''}`
+      );
+      // The rotation check reads this, so a 429 stays recognisable off the wire.
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
+    }
+    return data;
   });
-  const data = (await response.json().catch(() => ({}))) as any;
-  if (!response.ok) {
-    const message = data?.error?.message || `Gemini API error ${response.status}`;
-    const status = data?.error?.status ? ` ${data.error.status}` : '';
-    throw new Error(`${message}${status}${response.status === 429 ? ' RESOURCE_EXHAUSTED' : ''}`);
-  }
-  return data;
 }
 
 function readText(data: any): string {
@@ -402,6 +414,7 @@ export default {
       return json({
         ok: true,
         geminiApiKeyConfigured: Boolean(env.GEMINI_API_KEY),
+        geminiApiKey2Configured: Boolean(env.GEMINI_API_KEY_2),
         exaApiKeyConfigured: Boolean(env.EXA_API_KEY),
       });
     }

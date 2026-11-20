@@ -288,6 +288,46 @@ export function formatTranscript(messages: ChatMessageInput[]): string {
 }
 
 // Grounding (Search/Maps) has its own quota, separate from normal generation.
+// Every configured Gemini key, primary first, blanks dropped.
+export function geminiApiKeys(...keys: Array<string | undefined>): string[] {
+  return keys.map((key) => key?.trim()).filter((key): key is string => Boolean(key));
+}
+
+// A throttled or rejected key says nothing about the model or the request, so the
+// same call can move to the backup key. Anything else must surface unchanged.
+export function apiKeyRotationAllowed(error: unknown): boolean {
+  const status = (error as { status?: number } | null)?.status;
+  if (status === 429 || status === 403) return true;
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    message.includes('429') ||
+    message.includes('resource_exhausted') ||
+    message.includes('403') ||
+    message.includes('permission_denied') ||
+    message.includes('api_key_invalid')
+  );
+}
+
+// Runs `run` with key 0 and, if that key is exhausted, again with key 1 (and so
+// on). One key means one attempt, exactly as before.
+export async function withApiKeyFallback<T>(
+  keyCount: number,
+  run: (keyIndex: number, attempt: number) => Promise<T>
+): Promise<T> {
+  const attempts = Math.max(1, keyCount);
+  let lastError: unknown;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      return await run(index, index + 1);
+    } catch (error) {
+      lastError = error;
+      if (index + 1 >= attempts || !apiKeyRotationAllowed(error)) throw error;
+      console.warn(`[gemini] key=#${index + 1} failed, retrying on key=#${index + 2}`);
+    }
+  }
+  throw lastError;
+}
+
 // Only 429/503 may switch to a non-grounded retry; any other error must surface
 // unchanged instead of being masked by a second call.
 export const GROUNDING_TIMEOUT_NOTICES = {

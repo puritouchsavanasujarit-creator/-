@@ -29,6 +29,8 @@ import {
   parseGeminiJson,
   CHAT_MODEL_TIMEOUT_MS,
   DEGRADED_MODEL_TIMEOUT_MS,
+  geminiApiKeys,
+  withApiKeyFallback,
   MENTOR_MODEL_TIMEOUT_MS,
   MODEL_TIMEOUT_MS,
   QUICK_MODEL_TIMEOUT_MS,
@@ -68,19 +70,45 @@ const THINKING_TO_SDK: Record<ThinkingName, ThinkingLevel> = {
   MINIMAL: ThinkingLevel.MINIMAL,
 };
 
-function getAiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+function getAiClients(): GoogleGenAI[] {
+  const keys = geminiApiKeys(process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2);
+  if (keys.length === 0) {
     throw new Error('ไม่พบ GEMINI_API_KEY ในระบบ กรุณาตรวจสอบการตั้งค่า Secrets');
   }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
+  return keys.map(
+    (apiKey) =>
+      new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      })
+  );
+}
+
+// The same client surface the handlers already use, except an exhausted key
+// falls through to the backup key before the call is allowed to fail.
+function getAiClient(): GoogleGenAI {
+  const clients = getAiClients();
+  if (clients.length === 1) return clients[0];
+  return {
+    models: {
+      generateContent: (params: any) =>
+        withApiKeyFallback(clients.length, (index) =>
+          clients[index].models.generateContent(params)
+        ),
     },
-  });
+    chats: {
+      create: (params: any) => ({
+        sendMessage: (message: any) =>
+          withApiKeyFallback(clients.length, (index) =>
+            clients[index].chats.create(params).sendMessage(message)
+          ),
+      }),
+    },
+  } as unknown as GoogleGenAI;
 }
 
 async function createApp() {
@@ -91,6 +119,7 @@ async function createApp() {
     res.json({
       ok: true,
       geminiApiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
+      geminiApiKey2Configured: Boolean(process.env.GEMINI_API_KEY_2),
       exaApiKeyConfigured: isExaConfigured(),
     });
   });
