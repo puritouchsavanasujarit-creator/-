@@ -12,12 +12,18 @@ import {
   subscribeQuizSummary,
 } from '@/src/lib/firestoreRepo';
 import { computeDailyStreak } from '@/src/lib/streak';
+import {
+  DAILY_TIP_SESSION_KEY,
+  pickRandomServiceTip,
+  type ServiceTip,
+} from '@/src/lib/dailyTips';
 import { TopBar } from '@/src/components/TopBar';
 import { SimulatorView } from '@/src/components/SimulatorView';
 import { MentorAndGroundingView } from '@/src/components/MentorAndGroundingView';
 import { QuizView } from '@/src/components/QuizView';
 import { PlaybookView } from '@/src/components/PlaybookView';
 import { ProgressView } from '@/src/components/ProgressView';
+import { DailyServiceTipModal } from '@/src/components/DailyServiceTipModal';
 
 const ATTEMPTS_STORAGE_KEY = 'chatcraft_saved_attempts_v1';
 const QUIZ_STORAGE_KEY = 'chatcraft_quiz_progress_v1';
@@ -28,6 +34,20 @@ function AppShell() {
   const [activeTab, setActiveTab] = useState<AppTab>('simulator');
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>(TRAINING_SCENARIOS[0].id);
   const [resetSignal, setResetSignal] = useState(0);
+  const [dailyTip, setDailyTip] = useState<ServiceTip | null>(null);
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(DAILY_TIP_SESSION_KEY)) {
+        return;
+      }
+      const tip = pickRandomServiceTip();
+      sessionStorage.setItem(DAILY_TIP_SESSION_KEY, tip.id);
+      setDailyTip(tip);
+    } catch {
+      setDailyTip(pickRandomServiceTip());
+    }
+  }, []);
 
   const [localAttempts, setLocalAttempts] = useState<SavedAttempt[]>(() => {
     try {
@@ -220,6 +240,13 @@ function AppShell() {
           />
         )}
       </main>
+
+      <DailyServiceTipModal
+        tip={dailyTip}
+        onClose={() => setDailyTip(null)}
+        onNextTip={() => setDailyTip((prev) => pickRandomServiceTip(prev?.id))}
+        onOpenTab={setActiveTab}
+      />
     </div>
   );
 }
