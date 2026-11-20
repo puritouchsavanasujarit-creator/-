@@ -22,6 +22,9 @@ import {
   Pencil,
   Plus,
   Trash2,
+  GripVertical,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import {
   TRAINING_SCENARIOS,
@@ -47,11 +50,16 @@ import {
 } from '@/src/lib/firestoreRepo';
 import { EvaluationModal } from '@/src/components/EvaluationModal';
 import {
+  getOrderedChatIndices,
+  getOrderedProductIds,
+  getOrderedUpsellIds,
+  moveItemByKey,
   parseStoredOverrides,
   resolveChatScript,
   resolveProductInfo,
   resolveUpsellOption,
   saveStoredOverrides,
+  stepItemInOrder,
   type CustomChatScript,
   type ScriptOverrides,
 } from '@/src/lib/scriptOverrides';
@@ -123,7 +131,16 @@ export function SimulatorView({
   const [companionTab, setCompanionTab] = useState<CompanionTab>('coach');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [scriptSearch, setScriptSearch] = useState('');
+  const [scriptCategoryFilter, setScriptCategoryFilter] = useState('ทั้งหมด');
   const [scriptOverrides, setScriptOverrides] = useState<ScriptOverrides>(parseStoredOverrides);
+  const [dragItem, setDragItem] = useState<{
+    kind: 'customChat' | 'chat' | 'upsell' | 'product';
+    key: string;
+  } | null>(null);
+  const [dragOverItem, setDragOverItem] = useState<{
+    kind: 'customChat' | 'chat' | 'upsell' | 'product';
+    key: string;
+  } | null>(null);
   const [editingScript, setEditingScript] = useState<{
     kind: 'chat' | 'customChat' | 'upsell' | 'product';
     key: string;
@@ -624,11 +641,28 @@ export function SimulatorView({
     isSaturdayDispatch: calcSaturday,
   });
 
+  const orderedChatIndices = getOrderedChatIndices(scriptOverrides);
+  const orderedUpsellIds = getOrderedUpsellIds(scriptOverrides);
+  const orderedProductIds = getOrderedProductIds(scriptOverrides);
+
+  const scriptCategories = [
+    'ทั้งหมด',
+    ...Array.from(
+      new Set([
+        ...scriptOverrides.customChat.map((c) => c.category),
+        ...orderedChatIndices.map((idx) => getChatScript(idx).category),
+      ])
+    ),
+  ];
+
   const scriptQueryLower = scriptSearch.trim().toLowerCase();
 
-  const filteredScripts = CHAT_SCRIPTS.filter((_, index) => {
-    if (!scriptQueryLower) return true;
+  const filteredChatIndices = orderedChatIndices.filter((index) => {
     const resolved = getChatScript(index);
+    if (scriptCategoryFilter !== 'ทั้งหมด' && resolved.category !== scriptCategoryFilter) {
+      return false;
+    }
+    if (!scriptQueryLower) return true;
     return (
       resolved.title.toLowerCase().includes(scriptQueryLower) ||
       resolved.text.toLowerCase().includes(scriptQueryLower) ||
@@ -637,6 +671,9 @@ export function SimulatorView({
   });
 
   const filteredCustomScripts = scriptOverrides.customChat.filter((c) => {
+    if (scriptCategoryFilter !== 'ทั้งหมด' && c.category !== scriptCategoryFilter) {
+      return false;
+    }
     if (!scriptQueryLower) return true;
     return (
       c.title.toLowerCase().includes(scriptQueryLower) ||
@@ -645,9 +682,9 @@ export function SimulatorView({
     );
   });
 
-  const filteredUpsells = UPSELL_OPTIONS.filter((up) => {
+  const filteredUpsellIds = orderedUpsellIds.filter((id) => {
     if (!scriptQueryLower) return true;
-    const resolved = getUpsellOption(up.id);
+    const resolved = getUpsellOption(id);
     return (
       resolved.title.toLowerCase().includes(scriptQueryLower) ||
       resolved.script.toLowerCase().includes(scriptQueryLower) ||
@@ -656,9 +693,9 @@ export function SimulatorView({
     );
   });
 
-  const filteredProducts = PRODUCT_SETS.filter((prod) => {
+  const filteredProductIds = orderedProductIds.filter((id) => {
     if (!scriptQueryLower) return true;
-    const resolved = getProductInfo(prod.id);
+    const resolved = getProductInfo(id);
     return (
       resolved.code.toLowerCase().includes(scriptQueryLower) ||
       resolved.name.toLowerCase().includes(scriptQueryLower) ||
@@ -666,6 +703,84 @@ export function SimulatorView({
       resolved.occasions.toLowerCase().includes(scriptQueryLower)
     );
   });
+
+  const moveScriptItem = (
+    kind: 'customChat' | 'chat' | 'upsell' | 'product',
+    key: string,
+    direction: 'up' | 'down'
+  ) => {
+    setScriptOverrides((prev) => {
+      if (kind === 'customChat') {
+        const allKeys = prev.customChat.map((c) => c.id);
+        const visibleKeys = filteredCustomScripts.map((c) => c.id);
+        const nextKeys = stepItemInOrder(allKeys, visibleKeys, key, direction);
+        const byId = new Map(prev.customChat.map((c) => [c.id, c]));
+        return {
+          ...prev,
+          customChat: nextKeys.map((id) => byId.get(id)!).filter(Boolean),
+        };
+      }
+      if (kind === 'chat') {
+        const fullOrder = getOrderedChatIndices(prev);
+        const nextOrder = stepItemInOrder(fullOrder, filteredChatIndices, Number(key), direction);
+        return { ...prev, chatOrder: nextOrder };
+      }
+      if (kind === 'upsell') {
+        const fullOrder = getOrderedUpsellIds(prev);
+        const nextOrder = stepItemInOrder(fullOrder, filteredUpsellIds, key, direction);
+        return { ...prev, upsellOrder: nextOrder };
+      }
+      const fullOrder = getOrderedProductIds(prev);
+      const nextOrder = stepItemInOrder(fullOrder, filteredProductIds, key, direction);
+      return { ...prev, productOrder: nextOrder };
+    });
+  };
+
+  const dropScriptItem = (
+    kind: 'customChat' | 'chat' | 'upsell' | 'product',
+    targetKey: string
+  ) => {
+    if (!dragItem || dragItem.kind !== kind || dragItem.key === targetKey) {
+      setDragItem(null);
+      setDragOverItem(null);
+      return;
+    }
+    const sourceKey = dragItem.key;
+    setScriptOverrides((prev) => {
+      if (kind === 'customChat') {
+        const allKeys = prev.customChat.map((c) => c.id);
+        const nextKeys = moveItemByKey(allKeys, sourceKey, targetKey);
+        const byId = new Map(prev.customChat.map((c) => [c.id, c]));
+        return {
+          ...prev,
+          customChat: nextKeys.map((id) => byId.get(id)!).filter(Boolean),
+        };
+      }
+      if (kind === 'chat') {
+        const fullOrder = getOrderedChatIndices(prev);
+        const nextOrder = moveItemByKey(fullOrder, Number(sourceKey), Number(targetKey));
+        return { ...prev, chatOrder: nextOrder };
+      }
+      if (kind === 'upsell') {
+        const fullOrder = getOrderedUpsellIds(prev);
+        const nextOrder = moveItemByKey(fullOrder, sourceKey, targetKey);
+        return { ...prev, upsellOrder: nextOrder };
+      }
+      const fullOrder = getOrderedProductIds(prev);
+      const nextOrder = moveItemByKey(fullOrder, sourceKey, targetKey);
+      return { ...prev, productOrder: nextOrder };
+    });
+    setDragItem(null);
+    setDragOverItem(null);
+  };
+
+  const resetScriptOrder = (kind: 'chat' | 'upsell' | 'product') => {
+    setScriptOverrides((prev) => {
+      if (kind === 'chat') return { ...prev, chatOrder: undefined };
+      if (kind === 'upsell') return { ...prev, upsellOrder: undefined };
+      return { ...prev, productOrder: undefined };
+    });
+  };
 
   const handleNextScenario = () => {
     const idx = TRAINING_SCENARIOS.findIndex((s) => s.id === scenario.id);
@@ -1034,77 +1149,80 @@ export function SimulatorView({
                       <div className="px-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                         สคริปต์แชทมาตรฐาน
                       </div>
-                      {CHAT_SCRIPTS.filter((sc) => {
-                        const q = quickScriptQuery.trim().toLowerCase();
-                        if (!q) return true;
-                        const resolved = getChatScript(CHAT_SCRIPTS.indexOf(sc));
-                        return (
-                          resolved.title.toLowerCase().includes(q) ||
-                          resolved.category.toLowerCase().includes(q) ||
-                          resolved.text.toLowerCase().includes(q)
-                        );
-                      }).map((sc) => {
-                        const idx = CHAT_SCRIPTS.indexOf(sc);
-                        const resolved = getChatScript(idx);
-                        return (
-                          <button
-                            key={`quick-sc-${idx}`}
-                            type="button"
-                            onClick={() => insertChatScript(resolved.text)}
-                            className="w-full text-left p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-emerald-600 dark:hover:border-emerald-500 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/40 transition-colors cursor-pointer space-y-1"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                                {resolved.title}
-                              </span>
-                              <span className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
-                                {resolved.category}
-                              </span>
-                            </div>
-                            <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
-                              {resolved.text}
-                            </p>
-                          </button>
-                        );
-                      })}
+                      {orderedChatIndices
+                        .filter((idx) => {
+                          const q = quickScriptQuery.trim().toLowerCase();
+                          if (!q) return true;
+                          const resolved = getChatScript(idx);
+                          return (
+                            resolved.title.toLowerCase().includes(q) ||
+                            resolved.category.toLowerCase().includes(q) ||
+                            resolved.text.toLowerCase().includes(q)
+                          );
+                        })
+                        .map((idx) => {
+                          const resolved = getChatScript(idx);
+                          return (
+                            <button
+                              key={`quick-sc-${idx}`}
+                              type="button"
+                              onClick={() => insertChatScript(resolved.text)}
+                              className="w-full text-left p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-emerald-600 dark:hover:border-emerald-500 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/40 transition-colors cursor-pointer space-y-1"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                                  {resolved.title}
+                                </span>
+                                <span className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
+                                  {resolved.category}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
+                                {resolved.text}
+                              </p>
+                            </button>
+                          );
+                        })}
                     </div>
 
                     <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
                       <div className="px-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                         สคริปต์เสนอ Upsell
                       </div>
-                      {UPSELL_OPTIONS.filter((up) => {
-                        const q = quickScriptQuery.trim().toLowerCase();
-                        if (!q) return true;
-                        const resolved = getUpsellOption(up.id);
-                        return (
-                          resolved.title.toLowerCase().includes(q) ||
-                          resolved.bestFor.toLowerCase().includes(q) ||
-                          resolved.script.toLowerCase().includes(q)
-                        );
-                      }).map((up) => {
-                        const resolved = getUpsellOption(up.id);
-                        return (
-                          <button
-                            key={`quick-up-${up.id}`}
-                            type="button"
-                            onClick={() => insertChatScript(resolved.script)}
-                            className="w-full text-left p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-emerald-600 dark:hover:border-emerald-500 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/40 transition-colors cursor-pointer space-y-1"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                                {resolved.title}
-                              </span>
-                              <span className="text-[11px] text-emerald-700 dark:text-emerald-400 shrink-0">
-                                Upsell
-                              </span>
-                            </div>
-                            <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
-                              {resolved.script}
-                            </p>
-                          </button>
-                        );
-                      })}
+                      {orderedUpsellIds
+                        .filter((id) => {
+                          const q = quickScriptQuery.trim().toLowerCase();
+                          if (!q) return true;
+                          const resolved = getUpsellOption(id);
+                          return (
+                            resolved.title.toLowerCase().includes(q) ||
+                            resolved.bestFor.toLowerCase().includes(q) ||
+                            resolved.script.toLowerCase().includes(q)
+                          );
+                        })
+                        .map((id) => {
+                          const resolved = getUpsellOption(id);
+                          return (
+                            <button
+                              key={`quick-up-${id}`}
+                              type="button"
+                              onClick={() => insertChatScript(resolved.script)}
+                              className="w-full text-left p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-emerald-600 dark:hover:border-emerald-500 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/40 transition-colors cursor-pointer space-y-1"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                                  {resolved.title}
+                                </span>
+                                <span className="text-[11px] text-emerald-700 dark:text-emerald-400 shrink-0">
+                                  Upsell
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
+                                {resolved.script}
+                              </p>
+                            </button>
+                          );
+                        })}
                     </div>
                   </div>
                 </div>
@@ -1552,7 +1670,7 @@ export function SimulatorView({
 
             {companionTab === 'scripts' && (
               <div className="space-y-4">
-                <div>
+                <div className="space-y-2">
                   <input
                     type="search"
                     value={scriptSearch}
@@ -1560,12 +1678,44 @@ export function SimulatorView({
                     placeholder="ค้นหาสคริปต์, โปร Upsell, หรือชื่อเซต..."
                     className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-emerald-600 dark:focus:border-emerald-500 focus:outline-none"
                   />
+                  <div className="flex items-center justify-between gap-2">
+                    <select
+                      aria-label="กรองตามหมวดหมู่สคริปต์"
+                      value={scriptCategoryFilter}
+                      onChange={(e) => setScriptCategoryFilter(e.target.value)}
+                      className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:border-emerald-600 dark:focus:border-emerald-500 focus:outline-none cursor-pointer"
+                    >
+                      {scriptCategories.map((cat) => (
+                        <option key={cat} value={cat}>
+                          หมวดหมู่: {cat}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
+                      ลาก <GripVertical className="w-3 h-3 inline -mt-0.5" /> หรือกด ↑↓ เพื่อย้าย
+                    </span>
+                  </div>
                 </div>
 
                 {/* Chat Scripts */}
                 <div className="space-y-2.5">
                   <div className="flex items-center justify-between gap-2">
-                    <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">สคริปต์แชทมาตรฐาน</h4>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                        สคริปต์แชททั้งหมด ({filteredCustomScripts.length + filteredChatIndices.length})
+                      </h4>
+                      {scriptOverrides.chatOrder && (
+                        <button
+                          type="button"
+                          onClick={() => resetScriptOrder('chat')}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                          title="คืนลำดับสคริปต์แชทมาตรฐาน"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          รีเซ็ตลำดับ
+                        </button>
+                      )}
+                    </div>
                     <button
                       type="button"
                       onClick={() => setIsAddingCustomScript((v) => !v)}
@@ -1631,23 +1781,76 @@ export function SimulatorView({
                     </div>
                   )}
 
-                  {filteredCustomScripts.map((custom) => {
+                  {filteredCustomScripts.map((custom, posIdx) => {
                     const isEditing =
                       editingScript?.kind === 'customChat' && editingScript.key === custom.id;
+                    const isDragging = dragItem?.kind === 'customChat' && dragItem.key === custom.id;
+                    const isDropTarget =
+                      dragOverItem?.kind === 'customChat' &&
+                      dragOverItem.key === custom.id &&
+                      dragItem?.key !== custom.id;
                     return (
                       <div
                         key={custom.id}
-                        className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-white dark:bg-slate-800/60 space-y-1.5"
+                        draggable={!isEditing}
+                        onDragStart={() => setDragItem({ kind: 'customChat', key: custom.id })}
+                        onDragOver={(e) => {
+                          if (dragItem?.kind === 'customChat') {
+                            e.preventDefault();
+                            setDragOverItem({ kind: 'customChat', key: custom.id });
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          dropScriptItem('customChat', custom.id);
+                        }}
+                        onDragEnd={() => {
+                          setDragItem(null);
+                          setDragOverItem(null);
+                        }}
+                        className={`p-3 rounded-xl border bg-white dark:bg-slate-800/60 space-y-1.5 transition-all ${
+                          isDropTarget
+                            ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                            : 'border-emerald-200 dark:border-emerald-800/80'
+                        } ${isDragging ? 'opacity-50' : ''}`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span
-                            onClick={() => startScriptEdit('customChat', custom.id)}
-                            title="คลิกเพื่อแก้ไข"
-                            className="text-xs font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
-                          >
-                            {custom.title}
-                          </span>
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span
+                              title="ลากเพื่อย้ายตำแหน่ง"
+                              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-grab active:cursor-grabbing shrink-0"
+                            >
+                              <GripVertical className="w-3.5 h-3.5" />
+                            </span>
+                            <span
+                              onClick={() => startScriptEdit('customChat', custom.id)}
+                              title="คลิกเพื่อแก้ไข"
+                              className="text-xs font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 truncate cursor-pointer"
+                            >
+                              {custom.title}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              disabled={posIdx === 0}
+                              onClick={() => moveScriptItem('customChat', custom.id, 'up')}
+                              aria-label={`ย้ายขึ้น: ${custom.title}`}
+                              title="ย้ายขึ้น"
+                              className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={posIdx === filteredCustomScripts.length - 1}
+                              onClick={() => moveScriptItem('customChat', custom.id, 'down')}
+                              aria-label={`ย้ายลง: ${custom.title}`}
+                              title="ย้ายลง"
+                              className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                            >
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
                             <button
                               type="button"
                               onClick={() => startScriptEdit('customChat', custom.id)}
@@ -1738,26 +1941,78 @@ export function SimulatorView({
                     );
                   })}
 
-                  {filteredScripts.map((sc) => {
-                    const idx = CHAT_SCRIPTS.indexOf(sc);
+                  {filteredChatIndices.map((idx, posIdx) => {
                     const key = String(idx);
                     const resolved = getChatScript(idx);
                     const isEditing = editingScript?.kind === 'chat' && editingScript.key === key;
                     const isOverridden = scriptOverrides.chat[key] !== undefined;
+                    const isDragging = dragItem?.kind === 'chat' && dragItem.key === key;
+                    const isDropTarget =
+                      dragOverItem?.kind === 'chat' &&
+                      dragOverItem.key === key &&
+                      dragItem?.key !== key;
                     return (
                       <div
                         key={idx}
-                        className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 space-y-1.5"
+                        draggable={!isEditing}
+                        onDragStart={() => setDragItem({ kind: 'chat', key })}
+                        onDragOver={(e) => {
+                          if (dragItem?.kind === 'chat') {
+                            e.preventDefault();
+                            setDragOverItem({ kind: 'chat', key });
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          dropScriptItem('chat', key);
+                        }}
+                        onDragEnd={() => {
+                          setDragItem(null);
+                          setDragOverItem(null);
+                        }}
+                        className={`p-3 rounded-xl border bg-white dark:bg-slate-800/60 space-y-1.5 transition-all ${
+                          isDropTarget
+                            ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                            : 'border-slate-200 dark:border-slate-700'
+                        } ${isDragging ? 'opacity-50' : ''}`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span
-                            onClick={() => startScriptEdit('chat', key)}
-                            title="คลิกเพื่อแก้ไข"
-                            className="text-xs font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
-                          >
-                            {resolved.title}
-                          </span>
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span
+                              title="ลากเพื่อย้ายตำแหน่ง"
+                              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-grab active:cursor-grabbing shrink-0"
+                            >
+                              <GripVertical className="w-3.5 h-3.5" />
+                            </span>
+                            <span
+                              onClick={() => startScriptEdit('chat', key)}
+                              title="คลิกเพื่อแก้ไข"
+                              className="text-xs font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 truncate cursor-pointer"
+                            >
+                              {resolved.title}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              disabled={posIdx === 0}
+                              onClick={() => moveScriptItem('chat', key, 'up')}
+                              aria-label={`ย้ายขึ้น: ${resolved.title}`}
+                              title="ย้ายขึ้น"
+                              className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={posIdx === filteredChatIndices.length - 1}
+                              onClick={() => moveScriptItem('chat', key, 'down')}
+                              aria-label={`ย้ายลง: ${resolved.title}`}
+                              title="ย้ายลง"
+                              className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                            >
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
                             <button
                               type="button"
                               onClick={() => startScriptEdit('chat', key)}
@@ -1853,28 +2108,96 @@ export function SimulatorView({
 
                 {/* Upsell Snippets */}
                 <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
-                  <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">สคริปต์เสนอ Upsell</h4>
-                  {filteredUpsells.map((up) => {
-                    const resolved = getUpsellOption(up.id);
-                    const isEditing = editingScript?.kind === 'upsell' && editingScript.key === up.id;
-                    const isOverridden = scriptOverrides.upsell[up.id] !== undefined;
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                      สคริปต์เสนอ Upsell ({filteredUpsellIds.length})
+                    </h4>
+                    {scriptOverrides.upsellOrder && (
+                      <button
+                        type="button"
+                        onClick={() => resetScriptOrder('upsell')}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                        title="คืนลำดับ Upsell เดิม"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        รีเซ็ตลำดับ
+                      </button>
+                    )}
+                  </div>
+                  {filteredUpsellIds.map((upId, posIdx) => {
+                    const resolved = getUpsellOption(upId);
+                    const isEditing = editingScript?.kind === 'upsell' && editingScript.key === upId;
+                    const isOverridden = scriptOverrides.upsell[upId] !== undefined;
+                    const isDragging = dragItem?.kind === 'upsell' && dragItem.key === upId;
+                    const isDropTarget =
+                      dragOverItem?.kind === 'upsell' &&
+                      dragOverItem.key === upId &&
+                      dragItem?.key !== upId;
                     return (
                       <div
-                        key={up.id}
-                        className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 space-y-1.5"
+                        key={upId}
+                        draggable={!isEditing}
+                        onDragStart={() => setDragItem({ kind: 'upsell', key: upId })}
+                        onDragOver={(e) => {
+                          if (dragItem?.kind === 'upsell') {
+                            e.preventDefault();
+                            setDragOverItem({ kind: 'upsell', key: upId });
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          dropScriptItem('upsell', upId);
+                        }}
+                        onDragEnd={() => {
+                          setDragItem(null);
+                          setDragOverItem(null);
+                        }}
+                        className={`p-3 rounded-xl border bg-slate-50 dark:bg-slate-800/70 space-y-1.5 transition-all ${
+                          isDropTarget
+                            ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                            : 'border-slate-200 dark:border-slate-700'
+                        } ${isDragging ? 'opacity-50' : ''}`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span
-                            onClick={() => startScriptEdit('upsell', up.id)}
-                            title="คลิกเพื่อแก้ไข"
-                            className="text-xs font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
-                          >
-                            {resolved.title}
-                          </span>
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span
+                              title="ลากเพื่อย้ายตำแหน่ง"
+                              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-grab active:cursor-grabbing shrink-0"
+                            >
+                              <GripVertical className="w-3.5 h-3.5" />
+                            </span>
+                            <span
+                              onClick={() => startScriptEdit('upsell', upId)}
+                              title="คลิกเพื่อแก้ไข"
+                              className="text-xs font-semibold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 truncate cursor-pointer"
+                            >
+                              {resolved.title}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
                             <button
                               type="button"
-                              onClick={() => startScriptEdit('upsell', up.id)}
+                              disabled={posIdx === 0}
+                              onClick={() => moveScriptItem('upsell', upId, 'up')}
+                              aria-label={`ย้ายขึ้น: ${resolved.title}`}
+                              title="ย้ายขึ้น"
+                              className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={posIdx === filteredUpsellIds.length - 1}
+                              onClick={() => moveScriptItem('upsell', upId, 'down')}
+                              aria-label={`ย้ายลง: ${resolved.title}`}
+                              title="ย้ายลง"
+                              className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                            >
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => startScriptEdit('upsell', upId)}
                               className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
                             >
                               <Pencil className="w-3 h-3" />
@@ -1882,7 +2205,7 @@ export function SimulatorView({
                             </button>
                             <button
                               type="button"
-                              onClick={() => copyOrUseText(up.id, resolved.script, true)}
+                              onClick={() => copyOrUseText(upId, resolved.script, true)}
                               className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 cursor-pointer"
                             >
                               ใส่ในแชท
@@ -1951,7 +2274,7 @@ export function SimulatorView({
                               {isOverridden && (
                                 <button
                                   type="button"
-                                  onClick={() => resetScriptOverride('upsell', up.id)}
+                                  onClick={() => resetScriptOverride('upsell', upId)}
                                   className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
                                 >
                                   <RotateCcw className="w-3 h-3" />
@@ -1977,18 +2300,66 @@ export function SimulatorView({
 
                 {/* Quick Product Reference */}
                 <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
-                  <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">ราคาเซตสินค้าอ้างอิง</h4>
-                  {filteredProducts.map((prod) => {
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                      ราคาเซตสินค้าอ้างอิง ({filteredProductIds.length})
+                    </h4>
+                    {scriptOverrides.productOrder && (
+                      <button
+                        type="button"
+                        onClick={() => resetScriptOrder('product')}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                        title="คืนลำดับสินค้าเดิม"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        รีเซ็ตลำดับ
+                      </button>
+                    )}
+                  </div>
+                  {filteredProductIds.map((prodId, posIdx) => {
+                    const prod = PRODUCT_SETS.find((p) => p.id === prodId);
+                    if (!prod) return null;
                     const resolved = getProductInfo(prod.id);
                     const isEditing =
                       editingScript?.kind === 'product' && editingScript.key === prod.id;
                     const isOverridden = scriptOverrides.products[prod.id] !== undefined;
+                    const isDragging = dragItem?.kind === 'product' && dragItem.key === prod.id;
+                    const isDropTarget =
+                      dragOverItem?.kind === 'product' &&
+                      dragOverItem.key === prod.id &&
+                      dragItem?.key !== prod.id;
                     return (
                       <div
                         key={prod.id}
-                        className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 space-y-2"
+                        draggable={!isEditing}
+                        onDragStart={() => setDragItem({ kind: 'product', key: prod.id })}
+                        onDragOver={(e) => {
+                          if (dragItem?.kind === 'product') {
+                            e.preventDefault();
+                            setDragOverItem({ kind: 'product', key: prod.id });
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          dropScriptItem('product', prod.id);
+                        }}
+                        onDragEnd={() => {
+                          setDragItem(null);
+                          setDragOverItem(null);
+                        }}
+                        className={`p-2.5 rounded-xl border bg-white dark:bg-slate-800/60 space-y-2 transition-all ${
+                          isDropTarget
+                            ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                            : 'border-slate-200 dark:border-slate-700'
+                        } ${isDragging ? 'opacity-50' : ''}`}
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            title="ลากเพื่อย้ายตำแหน่ง"
+                            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-grab active:cursor-grabbing shrink-0"
+                          >
+                            <GripVertical className="w-3.5 h-3.5" />
+                          </span>
                           {prod.imageKey && (
                             <img
                               src={PRODUCT_IMAGE_MAP[prod.imageKey]}
@@ -2006,10 +2377,30 @@ export function SimulatorView({
                               >
                                 {resolved.code} {resolved.name}
                               </span>
-                              <div className="flex items-center gap-2 shrink-0">
+                              <div className="flex items-center gap-1.5 shrink-0">
                                 <span className="text-xs font-bold font-mono-num text-emerald-700 dark:text-emerald-400">
                                   {resolved.price.toLocaleString()} บ.
                                 </span>
+                                <button
+                                  type="button"
+                                  disabled={posIdx === 0}
+                                  onClick={() => moveScriptItem('product', prod.id, 'up')}
+                                  aria-label={`ย้ายขึ้น: ${resolved.name}`}
+                                  title="ย้ายขึ้น"
+                                  className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                                >
+                                  <ArrowUp className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={posIdx === filteredProductIds.length - 1}
+                                  onClick={() => moveScriptItem('product', prod.id, 'down')}
+                                  aria-label={`ย้ายลง: ${resolved.name}`}
+                                  title="ย้ายลง"
+                                  className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                                >
+                                  <ArrowDown className="w-3 h-3" />
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => startScriptEdit('product', prod.id)}

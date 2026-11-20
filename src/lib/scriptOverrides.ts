@@ -39,6 +39,9 @@ export interface ScriptOverrides {
   upsell: Record<string, UpsellOverride>;
   products: Record<string, ProductOverride>;
   playbookScriptsHeading?: string;
+  chatOrder?: number[];
+  upsellOrder?: string[];
+  productOrder?: string[];
 }
 
 export function parseStoredOverrides(): ScriptOverrides {
@@ -52,6 +55,9 @@ export function parseStoredOverrides(): ScriptOverrides {
       upsell?: Record<string, string | UpsellOverride>;
       products?: Record<string, ProductOverride>;
       playbookScriptsHeading?: string;
+      chatOrder?: number[];
+      upsellOrder?: string[];
+      productOrder?: string[];
     };
     const chat: Record<string, ChatScriptOverride> = {};
     if (parsed.chat) {
@@ -71,6 +77,9 @@ export function parseStoredOverrides(): ScriptOverrides {
       upsell,
       products: parsed.products ?? {},
       playbookScriptsHeading: parsed.playbookScriptsHeading,
+      chatOrder: Array.isArray(parsed.chatOrder) ? parsed.chatOrder : undefined,
+      upsellOrder: Array.isArray(parsed.upsellOrder) ? parsed.upsellOrder : undefined,
+      productOrder: Array.isArray(parsed.productOrder) ? parsed.productOrder : undefined,
     };
   } catch {
     return empty;
@@ -83,6 +92,84 @@ export function saveStoredOverrides(overrides: ScriptOverrides): void {
   } catch {
     // Ignore storage errors
   }
+}
+
+export function getOrderedChatIndices(overrides: ScriptOverrides): number[] {
+  const all = CHAT_SCRIPTS.map((_, idx) => idx);
+  if (!overrides.chatOrder || overrides.chatOrder.length === 0) return all;
+  const seen = new Set<number>();
+  const valid: number[] = [];
+  for (const idx of overrides.chatOrder) {
+    if (Number.isInteger(idx) && idx >= 0 && idx < CHAT_SCRIPTS.length && !seen.has(idx)) {
+      seen.add(idx);
+      valid.push(idx);
+    }
+  }
+  for (const idx of all) {
+    if (!seen.has(idx)) valid.push(idx);
+  }
+  return valid;
+}
+
+export function getOrderedUpsellIds(overrides: ScriptOverrides): string[] {
+  const all = UPSELL_OPTIONS.map((u) => u.id);
+  if (!overrides.upsellOrder || overrides.upsellOrder.length === 0) return all;
+  const validSet = new Set(all);
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  for (const id of overrides.upsellOrder) {
+    if (validSet.has(id) && !seen.has(id)) {
+      seen.add(id);
+      valid.push(id);
+    }
+  }
+  for (const id of all) {
+    if (!seen.has(id)) valid.push(id);
+  }
+  return valid;
+}
+
+export function getOrderedProductIds(overrides: ScriptOverrides): string[] {
+  const all = PRODUCT_SETS.map((p) => p.id);
+  if (!overrides.productOrder || overrides.productOrder.length === 0) return all;
+  const validSet = new Set(all);
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  for (const id of overrides.productOrder) {
+    if (validSet.has(id) && !seen.has(id)) {
+      seen.add(id);
+      valid.push(id);
+    }
+  }
+  for (const id of all) {
+    if (!seen.has(id)) valid.push(id);
+  }
+  return valid;
+}
+
+export function moveItemByKey<T>(order: T[], fromKey: T, toKey: T): T[] {
+  if (fromKey === toKey) return order;
+  const fromIdx = order.indexOf(fromKey);
+  const toIdx = order.indexOf(toKey);
+  if (fromIdx === -1 || toIdx === -1) return order;
+  const next = [...order];
+  const [moved] = next.splice(fromIdx, 1);
+  next.splice(toIdx, 0, moved);
+  return next;
+}
+
+export function stepItemInOrder<T>(
+  fullOrder: T[],
+  visibleKeys: T[],
+  key: T,
+  direction: 'up' | 'down'
+): T[] {
+  const visIdx = visibleKeys.indexOf(key);
+  if (visIdx === -1) return fullOrder;
+  const neighborVisIdx = direction === 'up' ? visIdx - 1 : visIdx + 1;
+  if (neighborVisIdx < 0 || neighborVisIdx >= visibleKeys.length) return fullOrder;
+  const targetKey = visibleKeys[neighborVisIdx];
+  return moveItemByKey(fullOrder, key, targetKey);
 }
 
 export function resolveChatScript(overrides: ScriptOverrides, index: number) {

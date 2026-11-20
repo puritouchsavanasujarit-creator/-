@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Copy, Check, AlertCircle, Pencil, RotateCcw, Plus, Trash2 } from 'lucide-react';
+import { Copy, Check, AlertCircle, Pencil, RotateCcw, Plus, Trash2, ArrowUp, ArrowDown, GripVertical } from 'lucide-react';
 import {
   SALES_STAGES,
   PRODUCT_SETS,
@@ -10,11 +10,16 @@ import {
 } from '@/src/data/playbookData';
 import { PRODUCT_IMAGE_MAP } from '@/src/data/productImages';
 import {
+  getOrderedChatIndices,
+  getOrderedProductIds,
+  getOrderedUpsellIds,
+  moveItemByKey,
   parseStoredOverrides,
   resolveChatScript,
   resolveProductInfo,
   resolveUpsellOption,
   saveStoredOverrides,
+  stepItemInOrder,
   type CustomChatScript,
   type ScriptOverrides,
 } from '@/src/lib/scriptOverrides';
@@ -51,6 +56,14 @@ export function PlaybookView() {
     category: 'กำหนดเอง',
     text: '',
   });
+  const [dragItem, setDragItem] = useState<{
+    kind: 'upsell' | 'customChat' | 'chat';
+    key: string;
+  } | null>(null);
+  const [dragOverItem, setDragOverItem] = useState<{
+    kind: 'upsell' | 'customChat' | 'chat';
+    key: string;
+  } | null>(null);
 
   useEffect(() => {
     saveStoredOverrides(overrides);
@@ -274,16 +287,69 @@ export function PlaybookView() {
     }
   };
 
-  const filteredProducts = PRODUCT_SETS.filter((p) => {
-    const resolved = resolveProductInfo(overrides, p.id);
-    const q = search.toLowerCase();
-    return (
-      resolved.name.toLowerCase().includes(q) ||
-      resolved.code.toLowerCase().includes(q) ||
-      p.fruits.some((f) => f.toLowerCase().includes(q)) ||
-      resolved.occasions.toLowerCase().includes(q)
-    );
-  });
+  const orderedProductIds = getOrderedProductIds(overrides);
+  const orderedUpsellIds = getOrderedUpsellIds(overrides);
+  const orderedChatIndices = getOrderedChatIndices(overrides);
+
+  const movePlaybookItem = (
+    kind: 'upsell' | 'customChat' | 'chat',
+    key: string,
+    direction: 'up' | 'down'
+  ) => {
+    setOverrides((prev) => {
+      if (kind === 'customChat') {
+        const keys = prev.customChat.map((c) => c.id);
+        const nextKeys = stepItemInOrder(keys, keys, key, direction);
+        const byId = new Map(prev.customChat.map((c) => [c.id, c]));
+        return { ...prev, customChat: nextKeys.map((id) => byId.get(id)!).filter(Boolean) };
+      }
+      if (kind === 'upsell') {
+        const order = getOrderedUpsellIds(prev);
+        return { ...prev, upsellOrder: stepItemInOrder(order, order, key, direction) };
+      }
+      const order = getOrderedChatIndices(prev);
+      return { ...prev, chatOrder: stepItemInOrder(order, order, Number(key), direction) };
+    });
+  };
+
+  const dropPlaybookItem = (kind: 'upsell' | 'customChat' | 'chat', targetKey: string) => {
+    if (!dragItem || dragItem.kind !== kind || dragItem.key === targetKey) {
+      setDragItem(null);
+      setDragOverItem(null);
+      return;
+    }
+    const sourceKey = dragItem.key;
+    setOverrides((prev) => {
+      if (kind === 'customChat') {
+        const keys = prev.customChat.map((c) => c.id);
+        const nextKeys = moveItemByKey(keys, sourceKey, targetKey);
+        const byId = new Map(prev.customChat.map((c) => [c.id, c]));
+        return { ...prev, customChat: nextKeys.map((id) => byId.get(id)!).filter(Boolean) };
+      }
+      if (kind === 'upsell') {
+        const order = getOrderedUpsellIds(prev);
+        return { ...prev, upsellOrder: moveItemByKey(order, sourceKey, targetKey) };
+      }
+      const order = getOrderedChatIndices(prev);
+      return { ...prev, chatOrder: moveItemByKey(order, Number(sourceKey), Number(targetKey)) };
+    });
+    setDragItem(null);
+    setDragOverItem(null);
+  };
+
+  const filteredProducts = orderedProductIds
+    .map((id) => PRODUCT_SETS.find((p) => p.id === id))
+    .filter((p): p is (typeof PRODUCT_SETS)[number] => {
+      if (!p) return false;
+      const resolved = resolveProductInfo(overrides, p.id);
+      const q = search.toLowerCase();
+      return (
+        resolved.name.toLowerCase().includes(q) ||
+        resolved.code.toLowerCase().includes(q) ||
+        p.fruits.some((f) => f.toLowerCase().includes(q)) ||
+        resolved.occasions.toLowerCase().includes(q)
+      );
+    });
 
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 space-y-10">
@@ -744,32 +810,85 @@ export function PlaybookView() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {UPSELL_OPTIONS.map((up) => {
-            const resolved = resolveUpsellOption(overrides, up.id);
-            const isEditing = editingItem?.kind === 'upsell' && editingItem.key === up.id;
-            const isOverridden = overrides.upsell[up.id] !== undefined;
+          {orderedUpsellIds.map((upId, posIdx) => {
+            const resolved = resolveUpsellOption(overrides, upId);
+            const isEditing = editingItem?.kind === 'upsell' && editingItem.key === upId;
+            const isOverridden = overrides.upsell[upId] !== undefined;
+            const isDragging = dragItem?.kind === 'upsell' && dragItem.key === upId;
+            const isDropTarget =
+              dragOverItem?.kind === 'upsell' &&
+              dragOverItem.key === upId &&
+              dragItem?.key !== upId;
             return (
               <div
-                key={up.id}
-                className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-2"
+                key={upId}
+                draggable={!isEditing}
+                onDragStart={() => setDragItem({ kind: 'upsell', key: upId })}
+                onDragOver={(e) => {
+                  if (dragItem?.kind === 'upsell') {
+                    e.preventDefault();
+                    setDragOverItem({ kind: 'upsell', key: upId });
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  dropPlaybookItem('upsell', upId);
+                }}
+                onDragEnd={() => {
+                  setDragItem(null);
+                  setDragOverItem(null);
+                }}
+                className={`p-4 rounded-xl bg-white dark:bg-slate-900 border space-y-2 transition-all ${
+                  isDropTarget
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                    : 'border-slate-200 dark:border-slate-800'
+                } ${isDragging ? 'opacity-50' : ''}`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <h3
-                      onClick={() => startEditItem('upsell', up.id)}
-                      title="คลิกเพื่อแก้ไข"
-                      className="text-sm font-bold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
+                  <div className="flex items-start gap-2 min-w-0">
+                    <span
+                      title="ลากเพื่อย้ายตำแหน่ง"
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-grab active:cursor-grabbing mt-0.5 shrink-0"
                     >
-                      {resolved.title}
-                    </h3>
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {resolved.priceText} · {resolved.bestFor}
+                      <GripVertical className="w-4 h-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <h3
+                        onClick={() => startEditItem('upsell', upId)}
+                        title="คลิกเพื่อแก้ไข"
+                        className="text-sm font-bold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
+                      >
+                        {resolved.title}
+                      </h3>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        {resolved.priceText} · {resolved.bestFor}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2.5 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
-                      onClick={() => startEditItem('upsell', up.id)}
+                      disabled={posIdx === 0}
+                      onClick={() => movePlaybookItem('upsell', upId, 'up')}
+                      aria-label={`ย้ายขึ้น: ${resolved.title}`}
+                      title="ย้ายขึ้น"
+                      className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={posIdx === orderedUpsellIds.length - 1}
+                      onClick={() => movePlaybookItem('upsell', upId, 'down')}
+                      aria-label={`ย้ายลง: ${resolved.title}`}
+                      title="ย้ายลง"
+                      className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startEditItem('upsell', upId)}
                       className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
                     >
                       <Pencil className="w-3.5 h-3.5" />
@@ -777,11 +896,11 @@ export function PlaybookView() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleCopy(up.id, resolved.script)}
+                      onClick={() => handleCopy(upId, resolved.script)}
                       className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 cursor-pointer"
                     >
-                      {copiedId === up.id ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      {copiedId === up.id ? 'คัดลอกแล้ว' : 'คัดลอก'}
+                      {copiedId === upId ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedId === upId ? 'คัดลอกแล้ว' : 'คัดลอก'}
                     </button>
                   </div>
                 </div>
@@ -839,7 +958,7 @@ export function PlaybookView() {
                       {isOverridden && (
                         <button
                           type="button"
-                          onClick={() => resetItemOverride('upsell', up.id)}
+                          onClick={() => resetItemOverride('upsell', upId)}
                           className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
                         >
                           <RotateCcw className="w-3 h-3" />
@@ -850,7 +969,7 @@ export function PlaybookView() {
                   </div>
                 ) : (
                   <p
-                    onClick={() => startEditItem('upsell', up.id)}
+                    onClick={() => startEditItem('upsell', upId)}
                     title="คลิกเพื่อแก้ไขข้อความ"
                     className="text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/70 p-3 rounded-lg leading-relaxed whitespace-pre-line hover:ring-1 hover:ring-emerald-500/50 cursor-pointer"
                   >
@@ -861,28 +980,81 @@ export function PlaybookView() {
             );
           })}
 
-          {overrides.customChat.map((custom) => {
+          {overrides.customChat.map((custom, posIdx) => {
             const isEditing =
               editingItem?.kind === 'customChat' && editingItem.key === custom.id;
+            const isDragging = dragItem?.kind === 'customChat' && dragItem.key === custom.id;
+            const isDropTarget =
+              dragOverItem?.kind === 'customChat' &&
+              dragOverItem.key === custom.id &&
+              dragItem?.key !== custom.id;
             return (
               <div
                 key={custom.id}
-                className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/80 space-y-2"
+                draggable={!isEditing}
+                onDragStart={() => setDragItem({ kind: 'customChat', key: custom.id })}
+                onDragOver={(e) => {
+                  if (dragItem?.kind === 'customChat') {
+                    e.preventDefault();
+                    setDragOverItem({ kind: 'customChat', key: custom.id });
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  dropPlaybookItem('customChat', custom.id);
+                }}
+                onDragEnd={() => {
+                  setDragItem(null);
+                  setDragOverItem(null);
+                }}
+                className={`p-4 rounded-xl bg-white dark:bg-slate-900 border space-y-2 transition-all ${
+                  isDropTarget
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                    : 'border-emerald-200 dark:border-emerald-800/80'
+                } ${isDragging ? 'opacity-50' : ''}`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-xs text-emerald-700 dark:text-emerald-400">
-                      {custom.category}
-                    </div>
-                    <h3
-                      onClick={() => startEditItem('customChat', custom.id)}
-                      title="คลิกเพื่อแก้ไข"
-                      className="text-sm font-bold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
+                  <div className="flex items-start gap-2 min-w-0">
+                    <span
+                      title="ลากเพื่อย้ายตำแหน่ง"
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-grab active:cursor-grabbing mt-0.5 shrink-0"
                     >
-                      {custom.title}
-                    </h3>
+                      <GripVertical className="w-4 h-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-xs text-emerald-700 dark:text-emerald-400">
+                        {custom.category}
+                      </div>
+                      <h3
+                        onClick={() => startEditItem('customChat', custom.id)}
+                        title="คลิกเพื่อแก้ไข"
+                        className="text-sm font-bold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
+                      >
+                        {custom.title}
+                      </h3>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2.5 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={posIdx === 0}
+                      onClick={() => movePlaybookItem('customChat', custom.id, 'up')}
+                      aria-label={`ย้ายขึ้น: ${custom.title}`}
+                      title="ย้ายขึ้น"
+                      className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={posIdx === overrides.customChat.length - 1}
+                      onClick={() => movePlaybookItem('customChat', custom.id, 'down')}
+                      aria-label={`ย้ายลง: ${custom.title}`}
+                      title="ย้ายลง"
+                      className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => startEditItem('customChat', custom.id)}
@@ -971,28 +1143,81 @@ export function PlaybookView() {
             );
           })}
 
-          {CHAT_SCRIPTS.map((_, i) => {
+          {orderedChatIndices.map((i, posIdx) => {
             const key = String(i);
             const resolved = resolveChatScript(overrides, i);
             const isEditing = editingItem?.kind === 'chat' && editingItem.key === key;
             const isOverridden = overrides.chat[key] !== undefined;
+            const isDragging = dragItem?.kind === 'chat' && dragItem.key === key;
+            const isDropTarget =
+              dragOverItem?.kind === 'chat' &&
+              dragOverItem.key === key &&
+              dragItem?.key !== key;
             return (
               <div
                 key={i}
-                className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-2"
+                draggable={!isEditing}
+                onDragStart={() => setDragItem({ kind: 'chat', key })}
+                onDragOver={(e) => {
+                  if (dragItem?.kind === 'chat') {
+                    e.preventDefault();
+                    setDragOverItem({ kind: 'chat', key });
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  dropPlaybookItem('chat', key);
+                }}
+                onDragEnd={() => {
+                  setDragItem(null);
+                  setDragOverItem(null);
+                }}
+                className={`p-4 rounded-xl bg-white dark:bg-slate-900 border space-y-2 transition-all ${
+                  isDropTarget
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                    : 'border-slate-200 dark:border-slate-800'
+                } ${isDragging ? 'opacity-50' : ''}`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400">{resolved.category}</div>
-                    <h3
-                      onClick={() => startEditItem('chat', key)}
-                      title="คลิกเพื่อแก้ไข"
-                      className="text-sm font-bold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
+                  <div className="flex items-start gap-2 min-w-0">
+                    <span
+                      title="ลากเพื่อย้ายตำแหน่ง"
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-grab active:cursor-grabbing mt-0.5 shrink-0"
                     >
-                      {resolved.title}
-                    </h3>
+                      <GripVertical className="w-4 h-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">{resolved.category}</div>
+                      <h3
+                        onClick={() => startEditItem('chat', key)}
+                        title="คลิกเพื่อแก้ไข"
+                        className="text-sm font-bold text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
+                      >
+                        {resolved.title}
+                      </h3>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2.5 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={posIdx === 0}
+                      onClick={() => movePlaybookItem('chat', key, 'up')}
+                      aria-label={`ย้ายขึ้น: ${resolved.title}`}
+                      title="ย้ายขึ้น"
+                      className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={posIdx === orderedChatIndices.length - 1}
+                      onClick={() => movePlaybookItem('chat', key, 'down')}
+                      aria-label={`ย้ายลง: ${resolved.title}`}
+                      title="ย้ายลง"
+                      className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => startEditItem('chat', key)}

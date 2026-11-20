@@ -11,6 +11,7 @@ import {
   subscribeAttempts,
   subscribeQuizSummary,
 } from '@/src/lib/firestoreRepo';
+import { computeDailyStreak } from '@/src/lib/streak';
 import { TopBar } from '@/src/components/TopBar';
 import { SimulatorView } from '@/src/components/SimulatorView';
 import { MentorAndGroundingView } from '@/src/components/MentorAndGroundingView';
@@ -166,10 +167,11 @@ function AppShell() {
   };
 
   const completedScenarioIds = Array.from(new Set(attempts.map((a) => a.scenarioId)));
+  const dailyStreak = computeDailyStreak(attempts);
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-slate-950 text-[#0F172A] dark:text-slate-100 transition-colors">
-      <TopBar activeTab={activeTab} onSelectTab={setActiveTab} />
+      <TopBar activeTab={activeTab} onSelectTab={setActiveTab} streakSummary={dailyStreak} />
 
       {authReady && !user && (
         <div className="bg-slate-900 dark:bg-slate-900/95 dark:border-b dark:border-slate-800 text-white text-xs px-4 py-2">
