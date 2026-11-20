@@ -5,6 +5,7 @@ import {
   GEMINI_MODELS,
   HINT_SCHEMA,
   CHAT_MODEL_TIMEOUT_MS,
+  DEGRADED_MODEL_TIMEOUT_MS,
   MENTOR_MODEL_TIMEOUT_MS,
   MODEL_TIMEOUT_MS,
   THINKING_LEVELS,
@@ -281,7 +282,7 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
         withModelFallback(
           GEMINI_MODEL_CHAIN,
           (model) => generate(env, model, body),
-          QUICK_MODEL_TIMEOUT_MS,
+          DEGRADED_MODEL_TIMEOUT_MS,
           MODEL_TIMEOUT_MS,
           'search'
         ),
@@ -375,7 +376,7 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
       const data = await withModelFallback(
         chain,
         (model) => generate(env, model, body),
-        QUICK_MODEL_TIMEOUT_MS,
+        DEGRADED_MODEL_TIMEOUT_MS,
         MODEL_TIMEOUT_MS,
         'maps'
       );

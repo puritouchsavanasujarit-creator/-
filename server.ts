@@ -28,6 +28,7 @@ import {
   modelChainStartingWith,
   parseGeminiJson,
   CHAT_MODEL_TIMEOUT_MS,
+  DEGRADED_MODEL_TIMEOUT_MS,
   MENTOR_MODEL_TIMEOUT_MS,
   MODEL_TIMEOUT_MS,
   QUICK_MODEL_TIMEOUT_MS,
@@ -337,7 +338,7 @@ async function createApp() {
                   thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.search] },
                 },
               }),
-            QUICK_MODEL_TIMEOUT_MS,
+            DEGRADED_MODEL_TIMEOUT_MS,
             MODEL_TIMEOUT_MS,
             'search'
           ),
@@ -434,7 +435,7 @@ async function createApp() {
         const response = await withModelFallback(
           chain,
           (model) => ai.models.generateContent({ model, contents }),
-          QUICK_MODEL_TIMEOUT_MS,
+          DEGRADED_MODEL_TIMEOUT_MS,
           MODEL_TIMEOUT_MS,
           'maps'
         );

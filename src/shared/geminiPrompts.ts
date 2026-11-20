@@ -75,6 +75,11 @@ export const CHAT_MODEL_TIMEOUT_MS = 6_000;
 // Mentor answers are longer prose, so they get a little more room than a turn.
 export const MENTOR_MODEL_TIMEOUT_MS = 8_000;
 
+// Degraded mode already spent a round trip on the grounded call, and the models
+// it is about to reuse just failed there. Cut the first one short and keep the
+// backup at MODEL_TIMEOUT_MS: same two models, same backup chance, seconds less.
+export const DEGRADED_MODEL_TIMEOUT_MS = 3_000;
+
 export class ModelTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`MODEL_TIMEOUT after ${timeoutMs}ms`);
