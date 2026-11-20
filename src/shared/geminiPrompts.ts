@@ -61,10 +61,11 @@ const RETRY_DELAY_MS = 600;
 // moves to the next model instead of waiting for the primary to answer.
 export const MODEL_TIMEOUT_MS = 12_000;
 
-// Search answers are a couple of sentences, so a model that has not answered in
-// a few seconds is slower than switching. Keeps one stalled model from spending
-// the whole request budget before the backup model is tried.
-export const SEARCH_MODEL_TIMEOUT_MS = 6_000;
+// Short, tool-backed answers (search, maps, hint, evaluation) do not need a
+// long wait: a first model still silent after a few seconds is slower than
+// switching. Only the first model is cut this short; the backup keeps
+// MODEL_TIMEOUT_MS so the fallback stays exactly as reachable as before.
+export const QUICK_MODEL_TIMEOUT_MS = 6_000;
 
 // One practice turn is a short JSON reply, so a model that is still silent after
 // a few seconds is slower than switching to the backup model. The backup still

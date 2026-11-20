@@ -30,7 +30,7 @@ import {
   CHAT_MODEL_TIMEOUT_MS,
   MENTOR_MODEL_TIMEOUT_MS,
   MODEL_TIMEOUT_MS,
-  SEARCH_MODEL_TIMEOUT_MS,
+  QUICK_MODEL_TIMEOUT_MS,
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
 import type {
@@ -169,7 +169,9 @@ async function createApp() {
               responseMimeType: 'application/json',
               responseSchema: HINT_SCHEMA as any,
             },
-          })
+          }),
+        QUICK_MODEL_TIMEOUT_MS,
+        MODEL_TIMEOUT_MS
       );
 
       res.json(parseGeminiJson(response.text));
@@ -205,7 +207,9 @@ async function createApp() {
               responseMimeType: 'application/json',
               responseSchema: EVALUATION_SCHEMA as any,
             },
-          })
+          }),
+        QUICK_MODEL_TIMEOUT_MS,
+        MODEL_TIMEOUT_MS
       );
 
       res.json(parseGeminiJson(response.text));
@@ -277,7 +281,8 @@ async function createApp() {
                 tools: [{ googleSearch: {} }],
               },
             }),
-          SEARCH_MODEL_TIMEOUT_MS
+          QUICK_MODEL_TIMEOUT_MS,
+          MODEL_TIMEOUT_MS
         );
 
         res.json({
@@ -303,7 +308,8 @@ async function createApp() {
                   thinkingConfig: { thinkingLevel: THINKING_TO_SDK[THINKING_LEVELS.search] },
                 },
               }),
-            SEARCH_MODEL_TIMEOUT_MS
+            QUICK_MODEL_TIMEOUT_MS,
+            MODEL_TIMEOUT_MS
           ),
           searchWebSources(query.trim()),
         ]);
@@ -368,7 +374,9 @@ async function createApp() {
             model,
             contents,
             config: { tools: [{ googleMaps: {} }], ...buildMapsToolConfig(latLng) },
-          })
+          }),
+          QUICK_MODEL_TIMEOUT_MS,
+          MODEL_TIMEOUT_MS
         );
 
         res.json({
@@ -380,8 +388,11 @@ async function createApp() {
       } catch (groundingError) {
         // Maps quota is exhausted: answer without live place data.
         const fallback = groundingFallback('maps', groundingError);
-        const response = await withModelFallback(chain, (model) =>
-          ai.models.generateContent({ model, contents })
+        const response = await withModelFallback(
+          chain,
+          (model) => ai.models.generateContent({ model, contents }),
+          QUICK_MODEL_TIMEOUT_MS,
+          MODEL_TIMEOUT_MS
         );
 
         res.json({ answerMarkdown: response.text ?? '', places: [], ...fallback });

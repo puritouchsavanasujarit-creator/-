@@ -24,7 +24,7 @@ import {
   groundingFallback,
   modelChainStartingWith,
   parseGeminiJson,
-  SEARCH_MODEL_TIMEOUT_MS,
+  QUICK_MODEL_TIMEOUT_MS,
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
 import type { ChatMessageInput, MentorHistoryItem } from './src/shared/geminiPrompts.ts';
@@ -131,7 +131,9 @@ async function handleChatHint(request: Request, env: Env): Promise<Response> {
           responseMimeType: 'application/json',
           responseSchema: HINT_SCHEMA,
         },
-      })
+      }),
+      QUICK_MODEL_TIMEOUT_MS,
+      MODEL_TIMEOUT_MS
     );
 
     return json(parseGeminiJson(readText(data)));
@@ -159,8 +161,11 @@ async function handleEvaluate(request: Request, env: Env): Promise<Response> {
         responseSchema: EVALUATION_SCHEMA,
       },
     };
-    const data = await withModelFallback(GEMINI_MODEL_CHAIN, (model) =>
-      generate(env, model, body)
+    const data = await withModelFallback(
+      GEMINI_MODEL_CHAIN,
+      (model) => generate(env, model, body),
+      QUICK_MODEL_TIMEOUT_MS,
+      MODEL_TIMEOUT_MS
     );
 
     return json(parseGeminiJson(readText(data)));
@@ -228,7 +233,8 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
       const data = await withModelFallback(
         GEMINI_MODEL_CHAIN,
         (model) => generate(env, model, { ...body, tools: [{ googleSearch: {} }] }),
-        SEARCH_MODEL_TIMEOUT_MS
+        QUICK_MODEL_TIMEOUT_MS,
+        MODEL_TIMEOUT_MS
       );
 
       return json({
@@ -245,7 +251,8 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
         withModelFallback(
           GEMINI_MODEL_CHAIN,
           (model) => generate(env, model, body),
-          SEARCH_MODEL_TIMEOUT_MS
+          QUICK_MODEL_TIMEOUT_MS,
+          MODEL_TIMEOUT_MS
         ),
         searchWebSources(query.trim(), env.EXA_API_KEY),
       ]);
@@ -308,7 +315,9 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
           ...body,
           tools: [{ googleMaps: {} }],
           ...buildMapsToolConfig(latLng),
-        })
+        }),
+        QUICK_MODEL_TIMEOUT_MS,
+        MODEL_TIMEOUT_MS
       );
 
       return json({
@@ -319,7 +328,12 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
     } catch (groundingError) {
       // Maps quota is exhausted: answer without live place data.
       const fallback = groundingFallback('maps', groundingError);
-      const data = await withModelFallback(chain, (model) => generate(env, model, body));
+      const data = await withModelFallback(
+        chain,
+        (model) => generate(env, model, body),
+        QUICK_MODEL_TIMEOUT_MS,
+        MODEL_TIMEOUT_MS
+      );
 
       return json({ answerMarkdown: readText(data), places: [], ...fallback });
     }
