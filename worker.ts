@@ -1,14 +1,10 @@
 import {
   CHAT_TURN_SCHEMA,
   EVALUATION_SCHEMA,
-  GEMINI_MODEL_CHAIN,
-  GEMINI_MODELS,
   HINT_SCHEMA,
   CHAT_MODEL_TIMEOUT_MS,
   DEGRADED_MODEL_TIMEOUT_MS,
   MENTOR_MODEL_TIMEOUT_MS,
-  geminiApiKeys,
-  withApiKeyFallback,
   MODEL_TIMEOUT_MS,
   THINKING_LEVELS,
   buildChatTurnPrompt,
@@ -25,12 +21,16 @@ import {
   findScenario,
   formatGeminiError,
   groundingFallback,
-  modelChainStartingWith,
   parseGeminiJson,
   QUICK_MODEL_TIMEOUT_MS,
   withModelFallback,
 } from './src/shared/geminiPrompts.ts';
-import type { ChatMessageInput, MentorHistoryItem } from './src/shared/geminiPrompts.ts';
+import type {
+  ChatMessageInput,
+  ChatPerspective,
+  MentorHistoryItem,
+} from './src/shared/geminiPrompts.ts';
+import { readGeneratedText, selectLlmProvider } from './src/shared/llmProvider.ts';
 import { searchWeb, searchWebSources } from './src/shared/exaSearch.ts';
 import { TRAINING_SCENARIOS } from './src/data/playbookData.ts';
 import { BUILD_ID } from './src/shared/buildStamp.ts';
@@ -38,11 +38,14 @@ import { BUILD_ID } from './src/shared/buildStamp.ts';
 interface Env {
   GEMINI_API_KEY?: string;
   GEMINI_API_KEY_2?: string;
+  LLM_API_KEY?: string;
+  LLM_API_KEY_2?: string;
+  LLM_BASE_URL?: string;
+  LLM_MODEL?: string;
+  LLM_MODEL_2?: string;
   EXA_API_KEY?: string;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
 }
-
-const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -51,50 +54,14 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-async function generate(env: Env, model: string, body: unknown): Promise<any> {
-  const keys = geminiApiKeys(env.GEMINI_API_KEY, env.GEMINI_API_KEY_2);
-  if (keys.length === 0) {
-    throw new Error('ไม่พบ GEMINI_API_KEY ในระบบ กรุณาตรวจสอบการตั้งค่า Secrets');
-  }
-  // An exhausted key says nothing about the model: retry the same request on the
-  // backup key before letting the model count as failed.
-  return withApiKeyFallback(keys, async (key) => {
-    const response = await fetch(`${API_BASE}/${model}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': key,
-      },
-      body: JSON.stringify(body),
-    });
-    const data = (await response.json().catch(() => ({}))) as any;
-    if (!response.ok) {
-      const message = data?.error?.message || `Gemini API error ${response.status}`;
-      const status = data?.error?.status ? ` ${data.error.status}` : '';
-      const error = new Error(
-        `${message}${status}${response.status === 429 ? ' RESOURCE_EXHAUSTED' : ''}`
-      );
-      // The rotation check reads this, so a 429 stays recognisable off the wire.
-      (error as Error & { status?: number }).status = response.status;
-      throw error;
-    }
-    return data;
-  });
-}
-
-function readText(data: any): string {
-  const parts = data?.candidates?.[0]?.content?.parts;
-  if (!Array.isArray(parts)) return '';
-  return parts.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join('');
-}
-
 async function handleChatTurn(request: Request, env: Env): Promise<Response> {
   const startedAt = Date.now();
   try {
-    const { scenarioId, messages, currentStage } = (await request.json()) as {
+    const { scenarioId, messages, currentStage, perspective } = (await request.json()) as {
       scenarioId: string;
       messages: ChatMessageInput[];
       currentStage?: number;
+      perspective?: ChatPerspective;
     };
 
     const scenario = findScenario(scenarioId);
@@ -102,12 +69,27 @@ async function handleChatTurn(request: Request, env: Env): Promise<Response> {
     if (!Array.isArray(messages) || messages.length === 0) {
       return json({ error: 'กรุณาส่งข้อความบทสนทนา' }, 400);
     }
-    if (!messages.some((m) => m.role === 'admin')) {
-      return json({ error: 'ไม่พบข้อความตอบกลับของแอดมิน' }, 400);
+    const traineeRole = perspective === 'buyer' ? 'customer' : 'admin';
+    if (!messages.some((m) => m.role === traineeRole)) {
+      return json(
+        {
+          error:
+            perspective === 'buyer'
+              ? 'ไม่พบข้อความของฝ่ายซื้อ'
+              : 'ไม่พบข้อความตอบกลับของแอดมิน',
+        },
+        400
+      );
     }
 
+    const provider = selectLlmProvider(env);
     const body = {
-      contents: [{ role: 'user', parts: [{ text: buildChatTurnPrompt(scenario, messages, currentStage) }] }],
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: buildChatTurnPrompt(scenario, messages, currentStage, perspective) }],
+        },
+      ],
       generationConfig: {
         thinkingConfig: { thinkingLevel: THINKING_LEVELS.chat },
         responseMimeType: 'application/json',
@@ -116,17 +98,19 @@ async function handleChatTurn(request: Request, env: Env): Promise<Response> {
     };
     const modelStartedAt = Date.now();
     const data = await withModelFallback(
-      GEMINI_MODEL_CHAIN,
-      (model) => generate(env, model, body),
+      provider.models,
+      (model) => provider.generate(model, body),
       CHAT_MODEL_TIMEOUT_MS,
       MODEL_TIMEOUT_MS,
       'chat/turn'
     );
     console.log(
-      `[chat/turn] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
+      `[chat/turn] provider=${provider.kind} model_ms=${Date.now() - modelStartedAt} total_ms=${
+        Date.now() - startedAt
+      }`
     );
 
-    return json(parseGeminiJson(readText(data)));
+    return json(parseGeminiJson(readGeneratedText(data)));
   } catch (error) {
     const formatted = formatGeminiError(error);
     return json({ error: formatted.message }, formatted.status);
@@ -136,25 +120,36 @@ async function handleChatTurn(request: Request, env: Env): Promise<Response> {
 async function handleChatHint(request: Request, env: Env): Promise<Response> {
   const startedAt = Date.now();
   try {
-    const { scenarioId, messages, currentStage } = (await request.json()) as {
+    const { scenarioId, messages, currentStage, perspective } = (await request.json()) as {
       scenarioId: string;
       messages: ChatMessageInput[];
       currentStage?: number;
+      perspective?: ChatPerspective;
     };
 
     const scenario = findScenario(scenarioId);
     if (!scenario) return json({ error: 'ไม่พบสถานการณ์ฝึกซ้อมที่ระบุ' }, 400);
 
+    const provider = selectLlmProvider(env);
     const modelStartedAt = Date.now();
-    const data = await withModelFallback(modelChainStartingWith(GEMINI_MODELS.hint), (model) =>
-      generate(env, model, {
-        contents: [{ role: 'user', parts: [{ text: buildHintPrompt(scenario, messages, currentStage) }] }],
-        generationConfig: {
-          thinkingConfig: { thinkingLevel: THINKING_LEVELS.hint },
-          responseMimeType: 'application/json',
-          responseSchema: HINT_SCHEMA,
-        },
-      }),
+    const data = await withModelFallback(
+      provider.hintModels,
+      (model) =>
+        provider.generate(model, {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: buildHintPrompt(scenario, messages, currentStage, perspective) },
+              ],
+            },
+          ],
+          generationConfig: {
+            thinkingConfig: { thinkingLevel: THINKING_LEVELS.hint },
+            responseMimeType: 'application/json',
+            responseSchema: HINT_SCHEMA,
+          },
+        }),
       QUICK_MODEL_TIMEOUT_MS,
       MODEL_TIMEOUT_MS,
       'chat/hint'
@@ -163,7 +158,7 @@ async function handleChatHint(request: Request, env: Env): Promise<Response> {
       `[chat/hint] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
     );
 
-    return json(parseGeminiJson(readText(data)));
+    return json(parseGeminiJson(readGeneratedText(data)));
   } catch (error) {
     const formatted = formatGeminiError(error);
     return json({ error: formatted.message }, formatted.status);
@@ -181,6 +176,7 @@ async function handleEvaluate(request: Request, env: Env): Promise<Response> {
     const scenario = findScenario(scenarioId);
     if (!scenario) return json({ error: 'ไม่พบสถานการณ์ฝึกซ้อมที่ระบุ' }, 400);
 
+    const provider = selectLlmProvider(env);
     const body = {
       contents: [{ role: 'user', parts: [{ text: buildEvaluationPrompt(scenario, messages) }] }],
       generationConfig: {
@@ -191,8 +187,8 @@ async function handleEvaluate(request: Request, env: Env): Promise<Response> {
     };
     const modelStartedAt = Date.now();
     const data = await withModelFallback(
-      GEMINI_MODEL_CHAIN,
-      (model) => generate(env, model, body),
+      provider.models,
+      (model) => provider.generate(model, body),
       QUICK_MODEL_TIMEOUT_MS,
       MODEL_TIMEOUT_MS,
       'chat/evaluate'
@@ -201,7 +197,7 @@ async function handleEvaluate(request: Request, env: Env): Promise<Response> {
       `[chat/evaluate] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
     );
 
-    return json(parseGeminiJson(readText(data)));
+    return json(parseGeminiJson(readGeneratedText(data)));
   } catch (error) {
     const formatted = formatGeminiError(error);
     return json({ error: formatted.message }, formatted.status);
@@ -227,6 +223,7 @@ async function handleMentorChat(request: Request, env: Env): Promise<Response> {
       { role: 'user' as const, parts: [{ text: message.trim() }] },
     ];
 
+    const provider = selectLlmProvider(env);
     const body = {
       contents,
       systemInstruction: { parts: [{ text: buildMentorSystemInstruction(scenario) }] },
@@ -236,8 +233,8 @@ async function handleMentorChat(request: Request, env: Env): Promise<Response> {
     };
     const modelStartedAt = Date.now();
     const data = await withModelFallback(
-      GEMINI_MODEL_CHAIN,
-      (model) => generate(env, model, body),
+      provider.models,
+      (model) => provider.generate(model, body),
       MENTOR_MODEL_TIMEOUT_MS,
       MODEL_TIMEOUT_MS,
       'mentor/chat'
@@ -246,7 +243,7 @@ async function handleMentorChat(request: Request, env: Env): Promise<Response> {
       `[mentor/chat] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
     );
 
-    return json({ reply: readText(data) });
+    return json({ reply: readGeneratedText(data) });
   } catch (error) {
     const formatted = formatGeminiError(error);
     return json({ error: formatted.message }, formatted.status);
@@ -261,6 +258,7 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
       return json({ error: 'กรุณาระบุคำค้นหา' }, 400);
     }
 
+    const provider = selectLlmProvider(env);
     const body = {
       contents: [{ role: 'user', parts: [{ text: query.trim() }] }],
       systemInstruction: { parts: [{ text: buildSearchSystemInstruction() }] },
@@ -270,8 +268,8 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
     const groundedStartedAt = Date.now();
     try {
       const data = await withModelFallback(
-        GEMINI_MODEL_CHAIN,
-        (model) => generate(env, model, { ...body, tools: [{ googleSearch: {} }] }),
+        provider.models,
+        (model) => provider.generate(model, { ...body, tools: [{ googleSearch: {} }] }),
         QUICK_MODEL_TIMEOUT_MS,
         MODEL_TIMEOUT_MS,
         'search'
@@ -283,19 +281,20 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
       );
 
       return json({
-        answerMarkdown: readText(data),
+        answerMarkdown: readGeneratedText(data),
         sources: extractWebSources(data?.candidates),
         grounded: true,
       });
     } catch (groundingError) {
-      // Grounding quota is exhausted: answer from model knowledge and attach
-      // backup reference links from Exa when it is configured.
+      // Grounding quota is exhausted (or the provider has no Google Search):
+      // answer from model knowledge and attach backup links from Exa when it is
+      // configured.
       const fallback = groundingFallback('search', groundingError);
       const fallbackStartedAt = Date.now();
       const [data, sources] = await Promise.all([
         withModelFallback(
-          GEMINI_MODEL_CHAIN,
-          (model) => generate(env, model, body),
+          provider.models,
+          (model) => provider.generate(model, body),
           DEGRADED_MODEL_TIMEOUT_MS,
           MODEL_TIMEOUT_MS,
           'search'
@@ -311,7 +310,7 @@ async function handleToolsSearch(request: Request, env: Env): Promise<Response> 
       );
 
       return json({
-        answerMarkdown: readText(data),
+        answerMarkdown: readGeneratedText(data),
         sources,
         ...fallback,
         ...(sources.length > 0 ? { notice: EXA_FALLBACK_NOTICE } : {}),
@@ -357,17 +356,19 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
       return json({ error: 'กรุณาระบุชื่อสถานที่ โรงพยาบาล หรือจุดจัดส่ง' }, 400);
     }
 
+    const provider = selectLlmProvider(env);
     const body = { contents: [{ role: 'user', parts: [{ text: buildMapsPrompt(query.trim()) }] }] };
-    const chain = modelChainStartingWith(GEMINI_MODELS.maps);
 
     const groundedStartedAt = Date.now();
     try {
-      const data = await withModelFallback(chain, (model) =>
-        generate(env, model, {
-          ...body,
-          tools: [{ googleMaps: {} }],
-          ...buildMapsToolConfig(latLng),
-        }),
+      const data = await withModelFallback(
+        provider.mapsModels,
+        (model) =>
+          provider.generate(model, {
+            ...body,
+            tools: [{ googleMaps: {} }],
+            ...buildMapsToolConfig(latLng),
+          }),
         QUICK_MODEL_TIMEOUT_MS,
         MODEL_TIMEOUT_MS,
         'maps'
@@ -379,17 +380,18 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
       );
 
       return json({
-        answerMarkdown: readText(data),
+        answerMarkdown: readGeneratedText(data),
         places: extractMapPlaces(data?.candidates),
         grounded: true,
       });
     } catch (groundingError) {
-      // Maps quota is exhausted: answer without live place data.
+      // Maps quota is exhausted (or unavailable on this provider): answer
+      // without live place data.
       const fallback = groundingFallback('maps', groundingError);
       const fallbackStartedAt = Date.now();
       const data = await withModelFallback(
-        chain,
-        (model) => generate(env, model, body),
+        provider.mapsModels,
+        (model) => provider.generate(model, body),
         DEGRADED_MODEL_TIMEOUT_MS,
         MODEL_TIMEOUT_MS,
         'maps'
@@ -400,7 +402,7 @@ async function handleToolsMaps(request: Request, env: Env): Promise<Response> {
         } fallback_ms=${Date.now() - fallbackStartedAt} total_ms=${Date.now() - startedAt}`
       );
 
-      return json({ answerMarkdown: readText(data), places: [], ...fallback });
+      return json({ answerMarkdown: readGeneratedText(data), places: [], ...fallback });
     }
   } catch (error) {
     const formatted = formatGeminiError(error);
@@ -417,6 +419,8 @@ export default {
         ok: true,
         buildId: BUILD_ID,
         scenarioIds: TRAINING_SCENARIOS.map((scenario) => scenario.id),
+        llmProvider: selectLlmProvider(env).label,
+        llmApiKeyConfigured: Boolean(env.LLM_API_KEY),
         geminiApiKeyConfigured: Boolean(env.GEMINI_API_KEY),
         geminiApiKey2Configured: Boolean(env.GEMINI_API_KEY_2),
         exaApiKeyConfigured: Boolean(env.EXA_API_KEY),

@@ -518,6 +518,8 @@ async function main() {
   const keyFlags =
     health.status === 200 && health.body && typeof health.body === 'object'
       ? {
+          provider: typeof health.body.llmProvider === 'string' ? health.body.llmProvider : null,
+          llm: Boolean(health.body.llmApiKeyConfigured),
           gemini: Boolean(health.body.geminiApiKeyConfigured),
           gemini2: Boolean(health.body.geminiApiKey2Configured),
           exa: Boolean(health.body.exaApiKeyConfigured),
@@ -606,8 +608,10 @@ async function main() {
     if (keyFlags) {
       const onOff = (value) => (value ? 'ตั้งแล้ว' : 'ไม่มี');
       console.log(
-        `\nคีย์จาก /api/health: GEMINI_API_KEY=${onOff(keyFlags.gemini)}, ` +
-          `GEMINI_API_KEY_2=${onOff(keyFlags.gemini2)}, EXA_API_KEY=${onOff(keyFlags.exa)}`
+        `\nคีย์จาก /api/health: LLM_API_KEY=${onOff(keyFlags.llm)}, ` +
+          `GEMINI_API_KEY=${onOff(keyFlags.gemini)}, ` +
+          `GEMINI_API_KEY_2=${onOff(keyFlags.gemini2)}, EXA_API_KEY=${onOff(keyFlags.exa)}` +
+          (keyFlags.provider ? ` | provider: ${keyFlags.provider}` : '')
       );
     }
 
@@ -665,13 +669,19 @@ async function main() {
     }
     if (keyFailures.length > 0) {
       const names = keyFailures.map((entry) => entry.name).join(', ');
-      console.log(`\n>>> ล้มเพราะคีย์ Gemini ใช้ไม่ได้: ${names}`);
-      console.log(
-        keyFlags?.gemini
-          ? '    /api/health บอกว่ามี GEMINI_API_KEY แต่ Google ปฏิเสธ (UNAUTHENTICATED) — ค่าเดิมใช้ไม่ได้แล้ว ต้องใส่คีย์ใหม่ที่ Sites → Secrets ของ environment นี้'
-          : '    /api/health บอกว่าไม่มี GEMINI_API_KEY — ยังไม่ได้ตั้ง Secrets ของ environment นี้'
-      );
-      if (keyFlags?.gemini && !keyFlags.gemini2) {
+      console.log(`\n>>> ล้มเพราะคีย์ AI ใช้ไม่ได้: ${names}`);
+      if (keyFlags?.llm) {
+        console.log(
+          '    /api/health บอกว่ามี LLM_API_KEY แต่ผู้ให้บริการปฏิเสธ (401/403) — ตรวจสอบคีย์ที่ Sites → Secrets ของ environment นี้'
+        );
+      } else {
+        console.log(
+          keyFlags?.gemini
+            ? '    /api/health บอกว่ามี GEMINI_API_KEY แต่ Google ปฏิเสธ (UNAUTHENTICATED) — ค่าเดิมใช้ไม่ได้แล้ว ต้องใส่คีย์ใหม่ที่ Sites → Secrets ของ environment นี้'
+            : '    /api/health บอกว่าไม่มี LLM_API_KEY และไม่มี GEMINI_API_KEY — ยังไม่ได้ตั้ง Secrets ของ environment นี้'
+        );
+      }
+      if (!keyFlags?.llm && keyFlags?.gemini && !keyFlags.gemini2) {
         console.log('    GEMINI_API_KEY_2 ก็ไม่มี จึงไม่มีคีย์สำรองให้สลับ');
       }
     }

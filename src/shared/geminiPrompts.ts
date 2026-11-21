@@ -18,6 +18,10 @@ export interface MentorHistoryItem {
 
 export type ThinkingName = 'LOW' | 'MEDIUM' | 'MINIMAL';
 
+// Which side of the chat the trainee plays. 'seller' keeps the original flow
+// (trainee = admin, AI = customer); 'buyer' flips it (trainee = customer, AI = salesperson).
+export type ChatPerspective = 'seller' | 'buyer';
+
 export interface GeminiSchema {
   type: string;
   properties?: Record<string, GeminiSchema>;
@@ -285,10 +289,17 @@ export function findScenario(scenarioId: string): TrainingScenario | undefined {
   return TRAINING_SCENARIOS.find((s) => s.id === scenarioId);
 }
 
-export function formatTranscript(messages: ChatMessageInput[]): string {
-  return messages
-    .map((m, idx) => `[${idx + 1}] ${m.role === 'customer' ? 'ลูกค้า' : 'แอดมิน (ผู้ฝึก)'}: ${m.text}`)
-    .join('\n');
+export function formatTranscript(
+  messages: ChatMessageInput[],
+  perspective: ChatPerspective = 'seller'
+): string {
+  const label = (role: ChatMessageInput['role']): string => {
+    if (perspective === 'buyer') {
+      return role === 'customer' ? 'ลูกค้า (ผู้ฝึก/ฝ่ายซื้อ)' : 'พนักงานขาย';
+    }
+    return role === 'customer' ? 'ลูกค้า' : 'แอดมิน (ผู้ฝึก)';
+  };
+  return messages.map((m, idx) => `[${idx + 1}] ${label(m.role)}: ${m.text}`).join('\n');
 }
 
 // How a key-chain outcome should be handled, shared by the model chain.
@@ -455,7 +466,12 @@ export function formatGeminiError(error: unknown): { status: number; message: st
     };
   }
   const errMsg = error instanceof Error ? error.message : String(error);
-  if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('PERMISSION_DENIED') || errMsg.includes('403')) {
+  if (
+    errMsg.includes('API_KEY_INVALID') ||
+    errMsg.includes('PERMISSION_DENIED') ||
+    errMsg.includes('401') ||
+    errMsg.includes('403')
+  ) {
     return {
       status: 403,
       message: 'API Key ไม่ถูกต้องหรือยังไม่ได้ตั้งค่า กรุณาตรวจสอบในเมนู Settings > Secrets',
@@ -476,8 +492,13 @@ export function formatGeminiError(error: unknown): { status: number; message: st
 export function buildChatTurnPrompt(
   scenario: TrainingScenario,
   messages: ChatMessageInput[],
-  currentStage?: number
+  currentStage?: number,
+  perspective: ChatPerspective = 'seller'
 ): string {
+  if (perspective === 'buyer') {
+    return buildBuyerTurnPrompt(scenario, messages, currentStage);
+  }
+
   const knowledge = buildKnowledgeContext();
   const transcript = formatTranscript(messages);
 
@@ -516,13 +537,73 @@ ${transcript}
 `;
 }
 
-export function buildHintPrompt(
+export function buildBuyerTurnPrompt(
   scenario: TrainingScenario,
   messages: ChatMessageInput[],
   currentStage?: number
 ): string {
   const knowledge = buildKnowledgeContext();
-  const transcript = formatTranscript(messages);
+  const transcript = formatTranscript(messages, 'buyer');
+
+  return `
+คุณทำหน้าที่ 2 บทบาทพร้อมกันในรูปแบบ JSON:
+บทบาทที่ 1: สวมบทบาทเป็น "พนักงานขาย (Admin Sale)" ของร้าน Premium Fruit Delivery ที่ตอบแชทลูกค้าอย่างมืออาชีพตามคู่มือร้าน (ผู้ฝึกกำลังสวมบทบาทเป็นลูกค้า/ฝ่ายซื้อ)
+บทบาทที่ 2: เป็น "โค้ชฝึกฝ่ายจัดซื้อ" ที่ประเมินข้อความล่าสุดของฝ่ายซื้อ (ผู้ฝึก) ว่าถามครบและตัดสินใจอย่างมีข้อมูลหรือไม่
+
+ข้อมูลสถานการณ์:
+ชื่อเคส: ${scenario.title}
+ช่องทาง: ${scenario.channel} | ช่วงเวลา: ${scenario.shiftTime}
+ระยะทางจัดส่ง: ${scenario.distanceKm} กม. | งบประมาณลูกค้า: ~${scenario.budgetHint} บาท
+Persona ลูกค้าที่ผู้ฝึกสวมบทบาท:
+${scenario.customerPersonaPrompt}
+
+เช็คลิสต์สำคัญของเคสนี้ (ใช้เป็นข้อมูลที่พนักงานขายควรแจ้ง/ขอจากลูกค้า):
+${scenario.keyCheckpoints.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+${knowledge}
+
+ขั้นตอนปัจจุบันก่อนหน้านี้: ขั้นที่ ${currentStage || 1} จาก 6 (${SALES_STAGES.map((s) => `${s.step}.${s.label}`).join(' -> ')})
+
+ประวัติแชททั้งหมด (role customer = ผู้ฝึก/ฝ่ายซื้อ, role admin = คุณ/พนักงานขาย):
+${transcript}
+
+คำแนะนำในการสร้าง JSON ตอบกลับ:
+- customerReply: คำตอบของพนักงานขายในรอบถัดไปเป็นภาษาไทยธรรมชาติ สุภาพ (1-3 ประโยค) ตาม Flow การขาย ให้ข้อมูลถูกต้องตามคู่มือ และทิ้งคำถามชวนคุยไว้ท้ายประโยคเสมอ
+- customerMood: สภาพอารมณ์ของพนักงานขาย 1 คำ เช่น "สุภาพ", "กระตือรือร้น", "ลังเล", "หนักแน่น"
+- stageDetected: หมายเลขขั้นตอนการขายปัจจุบัน (1 ถึง 6) ตาม Flow
+- isDealClosed: true เมื่อฝ่ายซื้อตกลงสั่งซื้อและให้ข้อมูลครบถ้วนแล้ว มิฉะนั้น false
+- endedWithQuestion: true ถ้าข้อความล่าสุดของฝ่ายซื้อมีคำถามหรือข้อมูลที่ทำให้พนักงานขายตอบต่อได้, false ถ้าไม่มี
+- toneScore: คะแนนความสุภาพ ชัดเจน และตรงประเด็นของข้อความล่าสุดของฝ่ายซื้อ (1 ถึง 5)
+- sopAccuracyNote: สรุปสั้นๆ 1 ประโยคว่าข้อความล่าสุดของฝ่ายซื้อถาม/ตรวจข้อมูลสำคัญครบหรือไม่ (โอกาสใช้งาน งบประมาณ สถานที่/ผู้รับ ช่วงเวลาจัดส่ง การชำระเงิน)
+- coachingTip: คำแนะนำเชิงสร้างสรรค์สั้นๆ 1-2 ประโยคสำหรับฝ่ายซื้อในรอบถัดไป
+- betterExample: ตัวอย่างประโยคที่ฝ่ายซื้อควรถามในจังหวะนี้ (กระชับ สุภาพ และได้ข้อมูลที่จำเป็น)
+`;
+}
+
+export function buildHintPrompt(
+  scenario: TrainingScenario,
+  messages: ChatMessageInput[],
+  currentStage?: number,
+  perspective: ChatPerspective = 'seller'
+): string {
+  const knowledge = buildKnowledgeContext();
+  const transcript = formatTranscript(messages, perspective);
+
+  if (perspective === 'buyer') {
+    return `
+คุณเป็นโค้ชฝ่ายจัดซื้อของร้าน Premium Fruit Delivery
+ผู้ฝึกกำลังรับบทเป็นลูกค้า/ฝ่ายซื้อในเคส "${scenario.title}" (ขั้นตอนการขายปัจจุบัน: ${currentStage || 1}/6)
+จากประวัติแชทล่าสุด กรุณาให้คำแนะนำสั้นๆ ว่าฝ่ายซื้อควรถามหรือตรวจสอบข้อมูลอะไรเพิ่มในจังหวะนี้ และให้ร่างประโยคถามที่สุภาพ ชัดเจน ทิ้งคำถามไว้ให้พนักงานขายตอบเสมอ
+
+${knowledge}
+
+เช็คลิสต์ของเคสนี้:
+${scenario.keyCheckpoints.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+บทสนทนาปัจจุบัน (role customer = ผู้ฝึก/ฝ่ายซื้อ, role admin = พนักงานขาย):
+${transcript}
+`;
+  }
 
   return `
 คุณเป็นหัวหน้าทีมฝึกอบรม Admin Sale ของร้าน Premium Fruit Delivery

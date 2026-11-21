@@ -42,6 +42,7 @@ import type {
   SessionEvaluation,
   SavedAttempt,
 } from '@/src/types';
+import type { ChatPerspective } from '@/src/shared/geminiPrompts';
 import { useFirebaseAuth } from '@/src/contexts/FirebaseContext';
 import {
   appendSessionMessageDoc,
@@ -85,6 +86,9 @@ interface EditDraft {
   price: string;
   occasions: string;
 }
+
+const SELLER_OPENING_MESSAGE =
+  'สวัสดีค่ะ 😊 ร้าน Premium Fruit Delivery ยินดีให้บริการนะคะ ลูกค้าสนใจจัดกระเช้าผลไม้ในโอกาสไหน งบประมาณประมาณเท่าไร และต้องการให้จัดส่งที่ไหนคะ';
 
 const EMPTY_DRAFT: EditDraft = {
   title: '',
@@ -155,6 +159,9 @@ export function SimulatorView({
   const scenario: TrainingScenario =
     TRAINING_SCENARIOS.find((s) => s.id === selectedScenarioId) ?? TRAINING_SCENARIOS[0];
 
+  const [perspective, setPerspective] = useState<ChatPerspective>('seller');
+  const [pendingPerspective, setPendingPerspective] = useState<ChatPerspective | null>(null);
+  const traineeRole: ChatMessage['role'] = perspective === 'buyer' ? 'customer' : 'admin';
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [attachPhotoSet, setAttachPhotoSet] = useState(false);
@@ -249,10 +256,11 @@ export function SimulatorView({
 
   const resetConversation = (target: TrainingScenario) => {
     const nextSessId = `sess_${Date.now()}`;
+    const isBuyerPerspective = perspective === 'buyer';
     const initMsg: ChatMessage = {
       id: `cust_init_${Date.now()}`,
-      role: 'customer',
-      text: target.openingMessage,
+      role: isBuyerPerspective ? 'admin' : 'customer',
+      text: isBuyerPerspective ? SELLER_OPENING_MESSAGE : target.openingMessage,
       timestamp: getCurrentTimeLabel(),
     };
 
@@ -282,13 +290,40 @@ export function SimulatorView({
   useEffect(() => {
     resetConversation(scenario);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenario.id, resetSignal]);
+  }, [scenario.id, resetSignal, perspective]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isSending]);
 
+  useEffect(() => {
+    if (!pendingPerspective) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPendingPerspective(null);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [pendingPerspective]);
+
+  const applyPerspective = (next: ChatPerspective) => {
+    setPerspective(next);
+    setPendingPerspective(null);
+    setIsScriptPickerOpen(false);
+    if (next === 'buyer' && companionTab === 'scripts') setCompanionTab('coach');
+  };
+
+  const handleSelectPerspective = (next: ChatPerspective) => {
+    if (next === perspective || isSending || isEvaluating) return;
+    const hasConversation = messages.some((m) => m.role === traineeRole);
+    if (hasConversation) {
+      setPendingPerspective(next);
+      return;
+    }
+    applyPerspective(next);
+  };
+
   const adminMessageCount = messages.filter((m) => m.role === 'admin').length;
+  const traineeMessageCount = messages.filter((m) => m.role === traineeRole).length;
 
   const handleSendMessage = async () => {
     const trimmed = inputText.trim();
@@ -298,7 +333,7 @@ export function SimulatorView({
     const finalText = trimmed || 'ส่งรูปภาพแบบกระเช้าผลไม้ 8–12 แบบตามงบประมาณให้ลูกค้าชมค่ะ';
     const newMsg: ChatMessage = {
       id: `admin-${Date.now()}`,
-      role: 'admin',
+      role: traineeRole,
       text: finalText,
       timestamp: getCurrentTimeLabel(),
       attachmentLabel: attachPhotoSet ? 'แนบรูปชุดผลไม้ 8–12 แบบตามงบประมาณ' : undefined,
@@ -325,6 +360,7 @@ export function SimulatorView({
         body: JSON.stringify({
           scenarioId: scenario.id,
           currentStage,
+          perspective,
           messages: nextMessages.map((m) => ({
             role: m.role,
             text: m.attachmentLabel ? `[แนบไฟล์: ${m.attachmentLabel}] ${m.text}` : m.text,
@@ -339,7 +375,7 @@ export function SimulatorView({
 
       const customerMsg: ChatMessage = {
         id: `cust_${Date.now()}`,
-        role: 'customer',
+        role: perspective === 'buyer' ? 'admin' : 'customer',
         text: data.customerReply,
         timestamp: getCurrentTimeLabel(),
       };
@@ -382,6 +418,7 @@ export function SimulatorView({
         body: JSON.stringify({
           scenarioId: scenario.id,
           currentStage,
+          perspective,
           messages: messages.map((m) => ({ role: m.role, text: m.text })),
         }),
       });
@@ -961,21 +998,58 @@ export function SimulatorView({
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 truncate">
-                  {scenario.customerName}
+                  {perspective === 'buyer'
+                    ? 'พนักงานขาย (Premium Fruit Delivery)'
+                    : scenario.customerName}
                 </h2>
                 <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
                   · {scenario.channel}
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
-                {scenario.shiftTime} · {scenario.customerProfile}
+                {perspective === 'buyer'
+                  ? `คุณสวมบทบาท: ${scenario.customerName} · ${scenario.customerProfile}`
+                  : `${scenario.shiftTime} · ${scenario.customerProfile}`}
               </p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <div
+                role="group"
+                aria-label="สลับฝ่ายที่คุณสวมบทบาท"
+                className="inline-flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg"
+              >
+                {(
+                  [
+                    { id: 'seller', label: 'ฝ่ายขาย' },
+                    { id: 'buyer', label: 'ฝ่ายซื้อ' },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => handleSelectPerspective(opt.id)}
+                    aria-pressed={perspective === opt.id}
+                    disabled={isSending || isEvaluating}
+                    title={
+                      isSending || isEvaluating
+                        ? 'รอข้อความหรือผลประเมินรอบนี้เสร็จก่อนสลับฝ่าย'
+                        : undefined
+                    }
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
+                      perspective === opt.id
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
               {liveFeedback?.customerMood && (
                 <span className="text-xs font-medium text-slate-600 dark:text-slate-300 mr-2">
-                  อารมณ์ลูกค้า: <strong className="text-slate-900 dark:text-slate-100">{liveFeedback.customerMood}</strong>
+                  {perspective === 'buyer' ? 'อารมณ์พนักงานขาย' : 'อารมณ์ลูกค้า'}:{' '}
+                  <strong className="text-slate-900 dark:text-slate-100">{liveFeedback.customerMood}</strong>
                 </span>
               )}
               <button
@@ -992,22 +1066,28 @@ export function SimulatorView({
           {/* Chat Thread */}
           <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[#EEF2F6] dark:bg-slate-950">
             {messages.map((msg) => {
-              const isAdmin = msg.role === 'admin';
+              const isMine = msg.role === traineeRole;
               return (
                 <motion.div
                   key={msg.id}
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.16 }}
-                  className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}
+                  className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}
                 >
                   <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1 px-1">
-                    {isAdmin ? 'คุณ (Admin Sale)' : scenario.customerName}
+                    {isMine
+                      ? perspective === 'buyer'
+                        ? 'คุณ (ฝ่ายซื้อ)'
+                        : 'คุณ (Admin Sale)'
+                      : perspective === 'buyer'
+                        ? 'พนักงานขาย'
+                        : scenario.customerName}
                   </span>
 
                   <div
                     className={`max-w-[85%] sm:max-w-[78%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-line shadow-2xs ${
-                      isAdmin
+                      isMine
                         ? 'bg-emerald-600 text-white rounded-br-sm'
                         : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-sm'
                     }`}
@@ -1015,7 +1095,7 @@ export function SimulatorView({
                     {msg.attachmentLabel && (
                       <div
                         className={`mb-2 px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 ${
-                          isAdmin
+                          isMine
                             ? 'bg-emerald-700/80 text-emerald-50'
                             : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
                         }`}
@@ -1037,12 +1117,14 @@ export function SimulatorView({
               <div className="flex items-start">
                 <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl rounded-bl-sm px-4 py-2.5 text-xs text-slate-500 dark:text-slate-300 flex items-center gap-2">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 dark:text-emerald-400" />
-                  <span>{scenario.customerName} กำลังพิมพ์ข้อความ...</span>
+                  <span>
+                    {perspective === 'buyer' ? 'พนักงานขาย' : scenario.customerName} กำลังพิมพ์ข้อความ...
+                  </span>
                 </div>
               </div>
             )}
 
-            {liveFeedback?.isDealClosed && (
+            {perspective === 'seller' && liveFeedback?.isDealClosed && (
               <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-xl flex flex-wrap items-center justify-between gap-3">
                 <div className="text-xs text-emerald-900 dark:text-emerald-200">
                   <strong>ปิดการขายสำเร็จแล้ว!</strong> ลูกค้ายืนยันออเดอร์เรียบร้อย กดประเมินผลเพื่อดูคะแนนละเอียดได้เลย
@@ -1104,6 +1186,8 @@ export function SimulatorView({
               ref={scriptPickerRef}
               className="relative flex flex-wrap items-center gap-2"
             >
+              {perspective === 'seller' && (
+                <>
               <button
                 type="button"
                 onClick={() => setAttachPhotoSet((v) => !v)}
@@ -1162,6 +1246,8 @@ export function SimulatorView({
                   }`}
                 />
               </button>
+                </>
+              )}
 
               <button
                 type="button"
@@ -1177,7 +1263,7 @@ export function SimulatorView({
                 ขอคำใบ้ก่อนตอบ
               </button>
 
-              {isScriptPickerOpen && (
+              {perspective === 'seller' && isScriptPickerOpen && (
                 <div
                   role="dialog"
                   aria-label="เลือกสคริปต์แชท"
@@ -1343,7 +1429,11 @@ export function SimulatorView({
                     handleSendMessage();
                   }
                 }}
-                placeholder="พิมพ์ข้อความตอบกลับลูกค้า (กด Enter เพื่อส่ง, Shift+Enter เพื่อขึ้นบรรทัดใหม่)..."
+                placeholder={
+                  perspective === 'buyer'
+                    ? 'พิมพ์ในฐานะฝ่ายซื้อ (Enter ส่ง, Shift+Enter ขึ้นบรรทัดใหม่)...'
+                    : 'พิมพ์ข้อความตอบกลับลูกค้า (กด Enter เพื่อส่ง, Shift+Enter เพื่อขึ้นบรรทัดใหม่)...'
+                }
                 className="flex-1 resize-none rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-emerald-600 dark:focus:border-emerald-500 focus:outline-none"
               />
               <button
@@ -1366,7 +1456,11 @@ export function SimulatorView({
         >
           {/* Segmented Tab Switcher */}
           <div className="p-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60">
-            <div className="grid grid-cols-3 gap-1 p-1 bg-slate-200/70 dark:bg-slate-950 rounded-xl">
+            <div
+              className={`grid ${
+                perspective === 'buyer' ? 'grid-cols-2' : 'grid-cols-3'
+              } gap-1 p-1 bg-slate-200/70 dark:bg-slate-950 rounded-xl`}
+            >
               <button
                 type="button"
                 onClick={() => setCompanionTab('coach')}
@@ -1391,18 +1485,20 @@ export function SimulatorView({
                 <Calculator className="w-3.5 h-3.5" />
                 คำนวณค่าส่ง
               </button>
-              <button
-                type="button"
-                onClick={() => setCompanionTab('scripts')}
-                className={`py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap ${
-                  companionTab === 'scripts'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-2xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                สคริปต์ & สินค้า
-              </button>
+              {perspective === 'seller' && (
+                <button
+                  type="button"
+                  onClick={() => setCompanionTab('scripts')}
+                  className={`py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                    companionTab === 'scripts'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-2xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  สคริปต์ & สินค้า
+                </button>
+              )}
             </div>
           </div>
 
@@ -1455,8 +1551,9 @@ export function SimulatorView({
 
                   {!liveFeedback ? (
                     <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                      ลองส่งข้อความทักทายและสอบถามความต้องการลูกค้าด้านซ้ายมือ โค้ชจะตรวจ{" "}
-                      <strong className="text-slate-900 dark:text-slate-100">กฎเหล็กการทิ้งคำถาม</strong> ความสุภาพ และความแม่นยำของ SOP ให้ทันทีหลังทุกข้อความ
+                      {perspective === 'buyer'
+                        ? 'ลองพิมพ์คำถามหรือข้อมูลฝ่ายซื้อด้านซ้ายมือ โค้ชจะตรวจว่าถามครบประเด็นสำคัญ ความสุภาพ และการทิ้งคำถามให้พนักงานขายตอบต่อได้หรือไม่ ทันทีหลังทุกข้อความ'
+                        : 'ลองส่งข้อความทักทายและสอบถามความต้องการลูกค้าด้านซ้ายมือ โค้ชจะตรวจ กฎเหล็กการทิ้งคำถาม ความสุภาพ และความแม่นยำของ SOP ให้ทันทีหลังทุกข้อความ'}
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -1489,7 +1586,7 @@ export function SimulatorView({
 
                         <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70">
                           <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                            น้ำเสียงงานบริการ
+                            {perspective === 'buyer' ? 'ความสุภาพ & ความชัดเจน' : 'น้ำเสียงงานบริการ'}
                           </div>
                           <div className="text-sm font-bold font-mono-num text-slate-900 dark:text-slate-100 mt-1">
                             {liveFeedback.toneScore}/5 คะแนน
@@ -1769,7 +1866,7 @@ export function SimulatorView({
               </div>
             )}
 
-            {companionTab === 'scripts' && (
+            {perspective === 'seller' && companionTab === 'scripts' && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <input
@@ -2604,9 +2701,10 @@ export function SimulatorView({
           {/* Sticky Footer CTA to Finish & Grade */}
           <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between gap-3">
             <div className="text-xs text-slate-600 dark:text-slate-300">
-              ตอบแล้ว <strong className="font-mono-num text-slate-900 dark:text-slate-100">{adminMessageCount}</strong>{' '}
+              ตอบแล้ว <strong className="font-mono-num text-slate-900 dark:text-slate-100">{traineeMessageCount}</strong>{' '}
               ข้อความ
             </div>
+            {perspective === 'seller' && (
             <button
               type="button"
               onClick={handleEvaluateSession}
@@ -2625,9 +2723,59 @@ export function SimulatorView({
                 </>
               )}
             </button>
+            )}
           </div>
         </aside>
       </div>
+
+      {pendingPerspective && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50"
+          onClick={() => setPendingPerspective(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="perspective-switch-title"
+            aria-describedby="perspective-switch-desc"
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-xl p-5"
+          >
+            <h3
+              id="perspective-switch-title"
+              className="text-base font-bold text-slate-900 dark:text-slate-100"
+            >
+              สลับไป{pendingPerspective === 'buyer' ? 'ฝ่ายซื้อ' : 'ฝ่ายขาย'}?
+            </h3>
+            <p
+              id="perspective-switch-desc"
+              className="mt-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed"
+            >
+              การสลับฝ่ายจะเริ่มบทสนทนาใหม่และล้างข้อความในห้องนี้
+              {perspective === 'buyer'
+                ? ' (คุณจะกลับไปตอบในฐานะฝ่ายขาย และ AI สวมบทลูกค้า)'
+                : ' (คุณจะพิมพ์ในฐานะฝ่ายซื้อ และ AI สวมบทพนักงานขาย)'}
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setPendingPerspective(null)}
+                className="px-3.5 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPerspective(pendingPerspective)}
+                className="px-3.5 py-2 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer"
+              >
+                สลับฝ่าย & เริ่มใหม่
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {evaluation && (
         <EvaluationModal
