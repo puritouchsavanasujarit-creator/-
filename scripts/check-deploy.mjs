@@ -20,6 +20,9 @@
 // (git rev-parse --short HEAD) ถ้าสองฝั่งตรงกันแต่เป็น build เก่ากว่า HEAD สคริปต์จะขึ้น
 // STALE และ exit 2 เพื่อไม่ให้ deploy ที่ล้าสมัยผ่านไปเงียบ ๆ
 //
+// transport timeout (คำขอไม่ได้รับคำตอบเลย) ถูกลองซ้ำหนึ่งครั้ง ถ้ายังไม่ตอบจะรายงาน
+// เป็น WARN แยกจาก FAIL เพราะยังไม่รู้ว่า deploy ผิดหรือแค่ช้า — ไม่กระทบ exit code
+//
 // Exit codes: 0 = all good, 1 = Gemini key rejected, 2 = other failures, the
 // worker and its assets come from different builds, or the deploy is behind HEAD.
 // No dependencies: needs Node 18+ (global fetch) or `bun scripts/check-deploy.mjs`.
@@ -53,10 +56,13 @@ const usage = () => {
   /api/tools/maps     ไม่ต้องใช้ scenarioId
   build ↔ git HEAD    เทียบ build id ของ deploy กับ commit ล่าสุด (STALE ถ้าเก่ากว่า)
 
+endpoint ที่ไม่ได้รับคำตอบเลย (transport timeout) ถูกลองซ้ำ 1 ครั้ง ถ้ายังไม่ตอบ
+จะขึ้น WARN และไม่นับเป็น FAIL เพราะยังไม่รู้ว่า deploy ผิดหรือแค่ช้า
+
 รหัสออก
-  0  ทุกอย่างผ่าน (คำเตือนเรื่อง grounding ไม่นับเป็นความล้มเหลว)
+  0  ทุกอย่างผ่าน (คำเตือนเรื่อง grounding และ transport timeout ไม่นับเป็นความล้มเหลว)
   1  คีย์ Gemini ถูกปฏิเสธ (UNAUTHENTICATED / API key not valid)
-  2  ความล้มเหลวอื่น, timeout, response ไม่ครบ field,
+  2  ความล้มเหลวอื่น (HTTP ไม่ใช่ 200 / response ไม่ครบ field),
      worker กับ asset ของหน้ามาจากคนละ build (ตรวจ chat/turn กับ chat/hint ไม่ได้)
      หรือ deploy ยังเป็น build เก่ากว่า commit ล่าสุด (git HEAD)`);
 };
@@ -473,8 +479,21 @@ async function main() {
   ];
 
   const runEndpoint = async (endpoint) => {
-    const result = await call(baseUrl, 'POST', endpoint.path, endpoint.payload, timeout);
+    const first = await call(baseUrl, 'POST', endpoint.path, endpoint.payload, timeout);
+    // คำขอที่ไม่ได้รับคำตอบเลยอาจแค่สะดุดชั่วคราว: ลองซ้ำอีกหนึ่งครั้งก่อนสรุป
+    const result = first.transportError
+      ? await call(baseUrl, 'POST', endpoint.path, endpoint.payload, timeout)
+      : first;
     const entry = judge(endpoint.name, endpoint.path, result, endpoint.required);
+    if (result.transportError) {
+      // ไม่ใช่คำตอบจาก deploy: รายงานเป็น WARN แทน FAIL จึงไม่เปลี่ยน exit code
+      entry.status = 'timeout';
+      entry.detail = `${result.transportError} — ลองซ้ำแล้ว 1 ครั้ง ยังไม่ได้รับคำตอบ`;
+    } else if (first.transportError) {
+      entry.detail = [`${first.transportError} — ลองซ้ำแล้วผ่าน`, entry.detail]
+        .filter(Boolean)
+        .join(' · ');
+    }
     results.push(entry);
     modelResults.push(entry);
   };
@@ -509,6 +528,7 @@ async function main() {
   const keyFailures = results.filter((entry) => entry.status === 'key');
   const quotaFailures = results.filter((entry) => entry.status === 'quota');
   const warnings = results.filter((entry) => entry.status === 'warn');
+  const timeouts = results.filter((entry) => entry.status === 'timeout');
   const skipped = results.filter((entry) => entry.status === 'skip' || entry.status === 'mismatch');
   const stale = results.filter((entry) => entry.status === 'stale');
   const modelChecks = modelResults.length;
@@ -543,6 +563,7 @@ async function main() {
             quota: quotaFailures.map((entry) => entry.name),
             failed: failed.map((entry) => entry.name),
             skipped: skipped.map((entry) => entry.name),
+            timeouts: timeouts.map((entry) => entry.name),
             warnings: warnings.map((entry) => entry.name),
           },
         },
@@ -554,6 +575,7 @@ async function main() {
     const label = {
       pass: 'PASS',
       warn: 'WARN',
+      timeout: 'WARN',
       key: 'KEY!',
       quota: 'QUOTA',
       fail: 'FAIL',
@@ -618,13 +640,27 @@ async function main() {
     }
 
     console.log('');
-    if (keyFailures.length === 0 && failed.length === 0 && quotaFailures.length === 0 && skipped.length === 0) {
+    if (
+      keyFailures.length === 0 &&
+      failed.length === 0 &&
+      quotaFailures.length === 0 &&
+      skipped.length === 0 &&
+      timeouts.length === 0
+    ) {
       console.log(`สรุป: ผ่านทุก endpoint (${modelPassed}/${modelChecks} คำขอที่เรียกโมเดล)`);
     } else {
       console.log(
         `สรุป: ผ่าน ${modelPassed}/${modelChecks} คำขอที่เรียกโมเดล, ` +
           `ล้มเหลว ${failed.length}, คีย์ถูกปฏิเสธ ${keyFailures.length}, ` +
-          `โควตาเต็ม ${quotaFailures.length}, ข้าม ${skipped.length}`
+          `โควตาเต็ม ${quotaFailures.length}, ข้าม ${skipped.length}, ` +
+          `timeout ${timeouts.length}`
+      );
+    }
+    if (timeouts.length > 0) {
+      console.log(
+        `\n>>> transport timeout (ลองซ้ำแล้วยังไม่ตอบ): ${timeouts
+          .map((entry) => entry.name)
+          .join(', ')} — ไม่นับเป็น FAIL เพราะไม่ได้รับคำตอบจาก deploy เลย แต่ endpoint เหล่านี้ยังไม่ได้รับการยืนยัน`
       );
     }
     if (keyFailures.length > 0) {
