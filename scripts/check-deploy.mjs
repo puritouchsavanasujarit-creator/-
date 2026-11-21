@@ -9,12 +9,13 @@
 // plainly which failures are caused by a Gemini key Google refuses, so a deploy
 // can be judged without guessing from a generic 500.
 //
-// scenarioId เปลี่ยนได้ระหว่าง build (เช่น hospital-visit -> no-1209) สคริปต์จึง
-// อ่าน id ที่ build นั้นรู้จักจาก JS bundle ของหน้าเว็บ แล้วยืนยันด้วยการยิง
-// chat/hint ที่ messages ว่าง (ถูกปฏิเสธก่อนถึงการเรียกโมเดล จึงไม่เปลืองโควตา)
-// ถ้า id จาก bundle ถูกปฏิเสธทั้งหมด แปลว่า worker กับ asset มาจากคนละ build:
-// สคริปต์จะรายงานเรื่องนี้และยังตรวจ mentor/chat, tools/search, tools/maps ต่อ
-// เพราะสามตัวนั้นไม่ต้องใช้ scenarioId
+// scenarioId เปลี่ยนได้ระหว่าง build สคริปต์จึงอ่านรายการ id ของ build นั้นจาก
+// /build-meta.json ของหน้าเว็บ (หรือจาก JS bundle ถ้า deployment ยังไม่มีไฟล์นี้)
+// แล้วยืนยันด้วยการยิง chat/hint ที่ messages ว่าง (ถูกปฏิเสธก่อนถึงการเรียกโมเดล
+// จึงไม่เปลืองโควตา)
+// worker กับ asset มาจากคนละ build เมื่อ build id ที่ /api/health รายงานไม่ตรงกับ
+// build-meta.json หรือเมื่อ id จาก asset ถูกปฏิเสธทั้งหมด: สคริปต์จะรายงานเรื่องนี้
+// และยังตรวจ mentor/chat, tools/search, tools/maps ต่อ เพราะสามตัวนั้นไม่ต้องใช้ scenarioId
 //
 // Exit codes: 0 = all good, 1 = Gemini key rejected, 2 = other failures or the
 // worker and its assets come from different builds.
@@ -22,8 +23,12 @@
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_SCENARIO_CANDIDATES = 6;
-// Minified data uses either quotes or backticks: id:"no-1209" / id:`no-1209`.
-const SCENARIO_ID_PATTERN = /id:[`"']((?:no|rt|ub)-[a-z0-9-]+)[`"']/g;
+// A TrainingScenario is the only object with id + title + … + customerPersonaPrompt.
+// Matching on id alone also hits PRODUCT_SETS (no-1209, rt-02, …) and promo items,
+// which would make a healthy deployment look like a worker/asset mismatch.
+// Minified data uses quotes or backticks: id:"x",title: / id:`x`,title:
+const SCENARIO_ID_PATTERN =
+  /id:[`"']([a-z0-9][a-z0-9-]*)[`"'],(?=[^}]{0,1600}?customerPersonaPrompt)/g;
 
 const usage = () => {
   console.log(`ใช้: node scripts/check-deploy.mjs <base-url> [ตัวเลือก]
@@ -198,9 +203,24 @@ function judge(name, path, result, required) {
   return entry;
 }
 
-// Read scenario ids out of the deployed frontend: index.html -> first JS chunk.
-// This keeps working when the data file is renamed or ids change between builds.
-async function discoverScenarioIds(baseUrl, timeoutMs) {
+// The build stamp the deploy writes next to the assets (scripts/build-meta.mjs).
+// Deployments made before it existed have no file: fall back to the bundle.
+async function fetchBuildMeta(baseUrl, timeoutMs) {
+  const response = await call(baseUrl, 'GET', '/build-meta.json', null, timeoutMs);
+  if (response.status !== 200 || !response.body || typeof response.body !== 'object') return null;
+  const scenarioIds = Array.isArray(response.body.scenarioIds)
+    ? response.body.scenarioIds.filter((id) => typeof id === 'string')
+    : [];
+  return {
+    buildId: typeof response.body.buildId === 'string' ? response.body.buildId : '',
+    scenarioIds,
+  };
+}
+
+// Read scenario ids out of the deployed frontend: build-meta.json when present,
+// otherwise index.html -> first JS chunk (works when ids change between builds).
+async function discoverScenarioIds(baseUrl, meta, timeoutMs) {
+  if (meta?.scenarioIds?.length) return meta.scenarioIds;
   try {
     const page = await call(baseUrl, 'GET', '/', null, timeoutMs);
     if (page.status !== 200 || typeof page.body !== 'string') return [];
@@ -228,45 +248,71 @@ async function scenarioExists(baseUrl, scenarioId, timeoutMs) {
   return !UNKNOWN_SCENARIO.test(textOf(probe.body));
 }
 
-// No hardcoded ids: only what this deployment's own bundle advertises is tried.
-// Every id being rejected means the worker is older or newer than the assets,
-// which is a deployment problem worth reporting on its own.
-async function resolveScenario(baseUrl, requested, timeoutMs) {
+// No hardcoded ids: only what this deployment's own build advertises is tried.
+// A build-id disagreement, or every advertised id being rejected, means the
+// worker and the assets are not from the same build: a deployment problem.
+async function resolveScenario(baseUrl, requested, timeoutMs, healthBody) {
+  const meta = await fetchBuildMeta(baseUrl, timeoutMs);
+  const workerBuildId = typeof healthBody?.buildId === 'string' ? healthBody.buildId : '';
+  const assetBuildId = meta?.buildId ?? '';
+  const build = { worker: workerBuildId, asset: assetBuildId };
+  const buildIdsDiffer = Boolean(workerBuildId && assetBuildId && workerBuildId !== assetBuildId);
+  const workerIds = Array.isArray(healthBody?.scenarioIds)
+    ? healthBody.scenarioIds.filter((id) => typeof id === 'string')
+    : [];
+  const base = { build, buildIdsDiffer, workerIds };
+
   if (requested) {
     const accepted = await scenarioExists(baseUrl, requested, timeoutMs);
     return {
+      ...base,
       id: accepted ? requested : '',
       source: 'จาก --scenario',
       tried: [requested],
-      mismatch: false,
+      mismatch: buildIdsDiffer,
       bundleIds: [],
       rejected: accepted ? [] : [requested],
     };
   }
 
-  const discovered = await discoverScenarioIds(baseUrl, timeoutMs);
+  const discovered = await discoverScenarioIds(baseUrl, meta, timeoutMs);
   const tried = [];
   for (const id of discovered.slice(0, MAX_SCENARIO_CANDIDATES)) {
     tried.push(id);
     if (await scenarioExists(baseUrl, id, timeoutMs)) {
       return {
+        ...base,
         id,
-        source: 'อ่านได้จาก bundle ของหน้าเว็บ',
+        source: meta?.scenarioIds?.length
+          ? 'จาก build-meta.json ของหน้าเว็บ'
+          : 'อ่านได้จาก bundle ของหน้าเว็บ',
         tried,
-        mismatch: false,
+        mismatch: buildIdsDiffer,
         bundleIds: discovered,
         rejected: [],
       };
     }
   }
   return {
+    ...base,
     id: '',
-    source: discovered.length ? 'id จาก bundle ถูกปฏิเสธทั้งหมด' : 'อ่าน id จาก bundle ไม่ได้',
+    source: discovered.length ? 'id ของ asset ถูกปฏิเสธทั้งหมด' : 'อ่าน id จาก asset ไม่ได้',
     tried,
-    mismatch: discovered.length > 0,
+    mismatch: buildIdsDiffer || discovered.length > 0,
     bundleIds: discovered,
     rejected: tried,
   };
+}
+
+function buildMismatchDetail(resolved) {
+  if (resolved.buildIdsDiffer) {
+    const worker = resolved.build.worker || '(ไม่ระบุ)';
+    const asset = resolved.build.asset || '(ไม่ระบุ — asset เก่ากว่าที่มี build stamp)';
+    return `worker build ${worker} ≠ asset build ${asset}`;
+  }
+  return `worker ปฏิเสธ scenarioId ทุกตัวของ asset (${resolved.rejected.slice(0, 3).join(', ')}${
+    resolved.rejected.length > 3 ? ' …' : ''
+  })`;
 }
 
 async function main() {
@@ -283,23 +329,32 @@ async function main() {
   const health = await call(baseUrl, 'GET', '/api/health', null, timeout);
   const healthEntry = judge('health', '/api/health', health, ['ok']);
 
-  const resolved = await resolveScenario(baseUrl, requestedScenario, timeout);
+  const resolved = await resolveScenario(baseUrl, requestedScenario, timeout, health.body);
   const results = [healthEntry];
+
+  if (resolved.mismatch) {
+    results.push({
+      name: 'build',
+      path: '/api/health ↔ /build-meta.json',
+      http: 0,
+      ms: 0,
+      status: 'mismatch',
+      detail: `${buildMismatchDetail(resolved)} — worker กับ asset มาจากคนละ build`,
+    });
+  }
 
   if (!resolved.id) {
     results.push({
       name: 'scenario',
-      path: '/api/chat/hint',
+      path: 'scenarioId',
       http: 0,
       ms: 0,
-      status: resolved.mismatch ? 'mismatch' : 'fail',
+      status: resolved.mismatch ? 'skip' : 'fail',
       detail: resolved.mismatch
-        ? `worker ปฏิเสธ scenarioId ทุกตัวที่ bundle ส่งมา (${resolved.rejected.join(
-            ', '
-          )}) — worker กับ asset มาจากคนละ build`
+        ? 'ข้ามเพราะ worker กับ asset มาจากคนละ build'
         : resolved.rejected.length
           ? `scenarioId ที่ระบุถูกปฏิเสธ: ${resolved.rejected.join(', ')}`
-          : 'อ่าน scenarioId จาก bundle ของหน้าเว็บไม่ได้ — ระบุเองด้วย --scenario <id>',
+          : 'อ่าน scenarioId จาก asset ไม่ได้ — ระบุเองด้วย --scenario <id>',
     });
   }
 
@@ -391,6 +446,8 @@ async function main() {
             id: resolved.id || null,
             source: resolved.source,
             mismatch: resolved.mismatch,
+            build: resolved.build,
+            workerIds: resolved.workerIds,
             bundleIds: resolved.bundleIds,
           },
           health: keyFlags,
@@ -420,8 +477,15 @@ async function main() {
     };
     console.log(`\nตรวจ ${baseUrl}`);
     console.log(
-      `scenario: ${resolved.id || '(ไม่พบ)'} (${resolved.source}) | timeout: ${timeout} ms\n`
+      `scenario: ${resolved.id || '(ไม่พบ)'} (${resolved.source}) | timeout: ${timeout} ms`
     );
+    if (resolved.build.worker || resolved.build.asset) {
+      console.log(
+        `build: worker=${resolved.build.worker || '?'} asset=${resolved.build.asset || '?'}` +
+          (resolved.workerIds.length ? ` | worker รู้จัก ${resolved.workerIds.length} scenario` : '')
+      );
+    }
+    console.log('');
     for (const entry of results) {
       const seconds = `${(entry.ms / 1000).toFixed(2)}s`.padStart(7);
       const http = String(entry.http || '-').padStart(3);
@@ -439,15 +503,22 @@ async function main() {
     }
 
     if (resolved.mismatch) {
+      console.log(`\n>>> worker กับ asset ของหน้าจอมาจากคนละ build: ${buildMismatchDetail(resolved)}`);
+      if (resolved.bundleIds.length > 0) {
+        console.log(
+          `    asset ประกาศ scenarioId: ${resolved.bundleIds.slice(0, 3).join(', ')}` +
+            (resolved.bundleIds.length > 3 ? ' …' : '')
+        );
+      }
+      if (resolved.workerIds.length > 0) {
+        console.log(
+          `    worker รู้จัก scenarioId: ${resolved.workerIds.slice(0, 3).join(', ')}` +
+            (resolved.workerIds.length > 3 ? ' …' : '')
+        );
+      }
       console.log(
-        `\n>>> worker กับ asset ของหน้าจอมาจากคนละ build: bundle ประกาศ scenarioId ${resolved.bundleIds
-          .slice(0, 3)
-          .join(', ')} แต่ worker ที่ deploy อยู่นั้นรู้จักแค่ id ของมันเอง`
+        '    ผู้ใช้ที่เปิดหน้าเว็บอาจเจอ 400 "ไม่พบสถานการณ์ฝึกซ้อมที่ระบุ" — ต้อง deploy worker กับ asset จาก build เดียวกัน (scripts/build-deploy.sh ตรวจให้ก่อน publish)'
       );
-      console.log(
-        '    ผู้ใช้ที่เปิดหน้าเว็บจะเจอ 400 "ไม่พบสถานการณ์ฝึกซ้อมที่ระบุ" ใน chat/turn และ chat/hint — ต้อง redeploy ให้ worker กับ asset มาจาก build เดียวกัน'
-      );
-      console.log('    (mentor/chat, tools/search, tools/maps ยังตรวจต่อได้เพราะไม่ใช้ scenarioId)');
     }
 
     console.log('');

@@ -32,6 +32,8 @@ import {
 } from './src/shared/geminiPrompts.ts';
 import type { ChatMessageInput, MentorHistoryItem } from './src/shared/geminiPrompts.ts';
 import { searchWeb, searchWebSources } from './src/shared/exaSearch.ts';
+import { TRAINING_SCENARIOS } from './src/data/playbookData.ts';
+import { BUILD_ID } from './src/shared/buildStamp.ts';
 
 interface Env {
   GEMINI_API_KEY?: string;
@@ -413,6 +415,8 @@ export default {
     if (url.pathname === '/api/health') {
       return json({
         ok: true,
+        buildId: BUILD_ID,
+        scenarioIds: TRAINING_SCENARIOS.map((scenario) => scenario.id),
         geminiApiKeyConfigured: Boolean(env.GEMINI_API_KEY),
         geminiApiKey2Configured: Boolean(env.GEMINI_API_KEY_2),
         exaApiKeyConfigured: Boolean(env.EXA_API_KEY),
