@@ -16,10 +16,15 @@
 // worker กับ asset มาจากคนละ build เมื่อ build id ที่ /api/health รายงานไม่ตรงกับ
 // build-meta.json หรือเมื่อ id จาก asset ถูกปฏิเสธทั้งหมด: สคริปต์จะรายงานเรื่องนี้
 // และยังตรวจ mentor/chat, tools/search, tools/maps ต่อ เพราะสามตัวนั้นไม่ต้องใช้ scenarioId
+// ชั้นที่สอง: build id ของ worker/asset ยังถูกเทียบกับ commit ที่ push ล่าสุด
+// (git rev-parse --short HEAD) ถ้าสองฝั่งตรงกันแต่เป็น build เก่ากว่า HEAD สคริปต์จะขึ้น
+// STALE และ exit 2 เพื่อไม่ให้ deploy ที่ล้าสมัยผ่านไปเงียบ ๆ
 //
-// Exit codes: 0 = all good, 1 = Gemini key rejected, 2 = other failures or the
-// worker and its assets come from different builds.
+// Exit codes: 0 = all good, 1 = Gemini key rejected, 2 = other failures, the
+// worker and its assets come from different builds, or the deploy is behind HEAD.
 // No dependencies: needs Node 18+ (global fetch) or `bun scripts/check-deploy.mjs`.
+
+import { execFileSync } from 'node:child_process';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_SCENARIO_CANDIDATES = 6;
@@ -46,12 +51,14 @@ const usage = () => {
   /api/mentor/chat    ไม่ต้องใช้ scenarioId
   /api/tools/search   ไม่ต้องใช้ scenarioId
   /api/tools/maps     ไม่ต้องใช้ scenarioId
+  build ↔ git HEAD    เทียบ build id ของ deploy กับ commit ล่าสุด (STALE ถ้าเก่ากว่า)
 
 รหัสออก
   0  ทุกอย่างผ่าน (คำเตือนเรื่อง grounding ไม่นับเป็นความล้มเหลว)
   1  คีย์ Gemini ถูกปฏิเสธ (UNAUTHENTICATED / API key not valid)
   2  ความล้มเหลวอื่น, timeout, response ไม่ครบ field,
-     หรือ worker กับ asset ของหน้ามาจากคนละ build (ตรวจ chat/turn กับ chat/hint ไม่ได้)`);
+     worker กับ asset ของหน้ามาจากคนละ build (ตรวจ chat/turn กับ chat/hint ไม่ได้)
+     หรือ deploy ยังเป็น build เก่ากว่า commit ล่าสุด (git HEAD)`);
 };
 
 function parseArgs(argv) {
@@ -304,6 +311,62 @@ async function resolveScenario(baseUrl, requested, timeoutMs, healthBody) {
   };
 }
 
+// Commit ของ repo ที่สคริปต์อยู่ (ไม่ใช่ cwd เพื่อไม่ให้เรียกจาก repo อื่นแล้วขึ้น STALE ผิด ๆ)
+function localHeadShortSha() {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: new URL('..', import.meta.url),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+// build id คือ "<short-sha>-<UTC time>Z" (scripts/build-deploy.sh)
+function shaFromBuildId(buildId) {
+  const match = /^([0-9a-f]{7,40})(?:-|$)/i.exec(String(buildId || '').trim());
+  return match ? match[1].toLowerCase() : '';
+}
+
+// git เลือกความยาว short sha ตามจำนวน object จึงเทียบด้วยส่วนที่สั้นกว่า
+function sameCommit(a, b) {
+  const shared = Math.min(a.length, b.length);
+  return shared >= 7 && a.slice(0, shared) === b.slice(0, shared);
+}
+
+function headVerdict(headSha, build, healthOk) {
+  const deployedBuildId = build.worker || build.asset || '';
+  const deployedSha = shaFromBuildId(deployedBuildId);
+  const base = { headSha, deployedBuildId, deployedSha };
+  if (!headSha) {
+    return {
+      ...base,
+      status: 'info',
+      detail: 'อ่าน git HEAD ไม่ได้ (ไม่ใช่ git repo หรือไม่มี git) — ข้ามการเทียบ HEAD',
+    };
+  }
+  if (!deployedSha) {
+    return {
+      ...base,
+      status: 'info',
+      detail: healthOk
+        ? `deployment ยังไม่มี build stamp (build=${deployedBuildId || '?'}) — เทียบกับ HEAD ${headSha} ไม่ได้`
+        : `อ่าน build id ไม่ได้เพราะ /api/health ตอบไม่ได้ — เทียบกับ HEAD ${headSha} ไม่ได้`,
+    };
+  }
+  if (sameCommit(deployedSha, headSha)) {
+    return { ...base, status: 'pass', detail: `build ${deployedSha} ตรงกับ HEAD ${headSha}` };
+  }
+  return {
+    ...base,
+    status: 'stale',
+    detail: `deploy เป็น build ${deployedSha} แต่ HEAD คือ ${headSha} — commit ล่าสุดยังไม่ได้ deploy`,
+  };
+}
+
 function buildMismatchDetail(resolved) {
   if (resolved.buildIdsDiffer) {
     const worker = resolved.build.worker || '(ไม่ระบุ)';
@@ -331,6 +394,8 @@ async function main() {
 
   const resolved = await resolveScenario(baseUrl, requestedScenario, timeout, health.body);
   const results = [healthEntry];
+  // นับเฉพาะใบที่ยิงคำขอไปยัง endpoint จริง (ไม่รวม health/build/head/scenario)
+  const modelResults = [];
 
   if (resolved.mismatch) {
     results.push({
@@ -342,6 +407,17 @@ async function main() {
       detail: `${buildMismatchDetail(resolved)} — worker กับ asset มาจากคนละ build`,
     });
   }
+
+  // build ภายในอาจตรงกันแต่เป็น commit เก่า: เทียบกับ HEAD ของ repo นี้
+  const head = headVerdict(localHeadShortSha(), resolved.build, health.status === 200);
+  results.push({
+    name: 'head',
+    path: 'build id ↔ git HEAD',
+    http: 0,
+    ms: 0,
+    status: head.status,
+    detail: head.detail,
+  });
 
   if (!resolved.id) {
     results.push({
@@ -396,11 +472,15 @@ async function main() {
     },
   ];
 
+  const runEndpoint = async (endpoint) => {
+    const result = await call(baseUrl, 'POST', endpoint.path, endpoint.payload, timeout);
+    const entry = judge(endpoint.name, endpoint.path, result, endpoint.required);
+    results.push(entry);
+    modelResults.push(entry);
+  };
+
   if (resolved.id) {
-    for (const endpoint of scenarioEndpoints) {
-      const result = await call(baseUrl, 'POST', endpoint.path, endpoint.payload, timeout);
-      results.push(judge(endpoint.name, endpoint.path, result, endpoint.required));
-    }
+    for (const endpoint of scenarioEndpoints) await runEndpoint(endpoint);
   } else {
     for (const endpoint of scenarioEndpoints) {
       results.push({
@@ -414,10 +494,7 @@ async function main() {
     }
   }
 
-  for (const endpoint of scenarioFreeEndpoints) {
-    const result = await call(baseUrl, 'POST', endpoint.path, endpoint.payload, timeout);
-    results.push(judge(endpoint.name, endpoint.path, result, endpoint.required));
-  }
+  for (const endpoint of scenarioFreeEndpoints) await runEndpoint(endpoint);
 
   const keyFlags =
     health.status === 200 && health.body && typeof health.body === 'object'
@@ -433,9 +510,11 @@ async function main() {
   const quotaFailures = results.filter((entry) => entry.status === 'quota');
   const warnings = results.filter((entry) => entry.status === 'warn');
   const skipped = results.filter((entry) => entry.status === 'skip' || entry.status === 'mismatch');
-  // นับเฉพาะใบที่ยิงคำขอจริง (ตัด health และใบที่ข้าม/ตรวจไม่ได้ออก)
-  const modelChecks = results.length - 1 - skipped.length;
-  const modelPassed = modelChecks - failed.length - keyFailures.length - quotaFailures.length;
+  const stale = results.filter((entry) => entry.status === 'stale');
+  const modelChecks = modelResults.length;
+  const modelPassed = modelResults.filter(
+    (entry) => entry.status === 'pass' || entry.status === 'warn'
+  ).length;
 
   if (json) {
     console.log(
@@ -451,6 +530,12 @@ async function main() {
             bundleIds: resolved.bundleIds,
           },
           health: keyFlags,
+          head: {
+            headSha: head.headSha || null,
+            deployedBuildId: head.deployedBuildId || null,
+            deployedSha: head.deployedSha || null,
+            stale: stale.length > 0,
+          },
           results,
           summary: {
             passed: modelPassed,
@@ -474,6 +559,8 @@ async function main() {
       fail: 'FAIL',
       skip: 'SKIP',
       mismatch: 'MISMATCH',
+      stale: 'STALE',
+      info: 'INFO',
     };
     console.log(`\nตรวจ ${baseUrl}`);
     console.log(
@@ -499,6 +586,15 @@ async function main() {
       console.log(
         `\nคีย์จาก /api/health: GEMINI_API_KEY=${onOff(keyFlags.gemini)}, ` +
           `GEMINI_API_KEY_2=${onOff(keyFlags.gemini2)}, EXA_API_KEY=${onOff(keyFlags.exa)}`
+      );
+    }
+
+    if (stale.length > 0) {
+      console.log('\n>>> deploy ยังเป็น build เก่ากว่า commit ล่าสุด (git HEAD)');
+      console.log(`    deploy build: ${head.deployedSha} (${head.deployedBuildId})`);
+      console.log(`    git HEAD:     ${head.headSha}`);
+      console.log(
+        '    worker กับ asset ตรงกันแล้ว แต่ทั้งคู่เป็น build เก่า — commit ล่าสุดยังไม่ขึ้น production/preview: รัน bash scripts/build-deploy.sh แล้ว publish ใหม่'
       );
     }
 
@@ -562,7 +658,7 @@ async function main() {
   }
 
   if (keyFailures.length > 0) process.exit(1);
-  if (failed.length > 0 || skipped.length > 0) process.exit(2);
+  if (failed.length > 0 || skipped.length > 0 || stale.length > 0) process.exit(2);
   process.exit(0);
 }
 
