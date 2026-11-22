@@ -18,6 +18,9 @@ export interface LlmEnv {
   LLM_BASE_URL?: string;
   LLM_MODEL?: string;
   LLM_MODEL_2?: string;
+  // Opt-in only: reasoning_effort is absent from requests unless this is set
+  // (see reasoningEffortOption below).
+  LLM_REASONING_EFFORT?: string;
 }
 
 // Groq's OpenAI-compatible endpoint: free tier, no card, and json_schema output.
@@ -142,17 +145,74 @@ async function geminiGenerate(env: LlmEnv, model: string, body: any): Promise<an
   });
 }
 
-async function openAiCompatibleGenerate(
-  env: LlmEnv,
-  baseUrl: string,
-  model: string,
-  body: any
-): Promise<any> {
-  const keys = [env.LLM_API_KEY, env.LLM_API_KEY_2]
-    .map((key) => key?.trim())
-    .filter((key): key is string => Boolean(key));
-  if (keys.length === 0) throw missingKeyError('LLM_API_KEY');
+// The same knobs under Gemini's camelCase name and the OpenAI-compatible one.
+const SAMPLING_FIELDS: ReadonlyArray<readonly [string, string]> = [
+  ['temperature', 'temperature'],
+  ['topP', 'top_p'],
+  ['topK', 'top_k'],
+  ['candidateCount', 'n'],
+  ['seed', 'seed'],
+  ['presencePenalty', 'presence_penalty'],
+  ['frequencyPenalty', 'frequency_penalty'],
+];
 
+// Optional knobs are not accepted by every OpenAI-compatible endpoint. A 400 that
+// names one of them is about that knob, so it is dropped and the call retried
+// once instead of failing the whole turn.
+const OPTIONAL_PARAMS = [
+  'reasoning_effort',
+  'top_k',
+  'n',
+  'seed',
+  'presence_penalty',
+  'frequency_penalty',
+  'stop',
+];
+
+type ReasoningEffort = 'low' | 'medium' | 'high';
+
+// Gemini's thinking levels have no direct OpenAI equivalent; the closest knob is
+// reasoning_effort. MINIMAL maps to low because Groq and others reject 'minimal'.
+function reasoningEffort(level: unknown): ReasoningEffort | undefined {
+  switch (String(level ?? '').toUpperCase()) {
+    case 'MINIMAL':
+    case 'LOW':
+      return 'low';
+    case 'MEDIUM':
+      return 'medium';
+    case 'HIGH':
+      return 'high';
+    default:
+      return undefined;
+  }
+}
+
+// reasoning_effort is opt-in, never derived automatically: not every
+// OpenAI-compatible endpoint accepts it, and when an endpoint does accept it the
+// supported levels are model-specific, so sending it by default turns a legal
+// request into a 400 on those providers. LLM_REASONING_EFFORT selects the
+// behaviour:
+//   low | medium | high → send exactly that level
+//   auto                → translate the request's thinkingConfig level
+//   unset / off         → omit the field entirely (default)
+function reasoningEffortOption(
+  option: string | undefined,
+  config: any
+): ReasoningEffort | undefined {
+  const value = String(option ?? '').trim().toLowerCase();
+  if (value === 'auto') return reasoningEffort(config?.thinkingConfig?.thinkingLevel);
+  if (value === 'low' || value === 'medium' || value === 'high') return value;
+  return undefined;
+}
+
+// Gemini request body → OpenAI-compatible chat/completions payload. Every field
+// the handlers put in generationConfig has a counterpart here, so a caller can
+// keep building one body shape regardless of the provider.
+function toOpenAiPayload(
+  model: string,
+  body: any,
+  effortOption?: string
+): Record<string, unknown> {
   const payload: Record<string, unknown> = { model, messages: toChatMessages(body) };
   const config = body?.generationConfig ?? {};
   if (config.responseSchema) {
@@ -168,17 +228,58 @@ async function openAiCompatibleGenerate(
     payload.response_format = { type: 'json_object' };
   }
   if (typeof config.maxOutputTokens === 'number') payload.max_tokens = config.maxOutputTokens;
+  for (const [gemini, openai] of SAMPLING_FIELDS) {
+    const value = config[gemini];
+    if (typeof value === 'number') payload[openai] = value;
+  }
+  if (Array.isArray(config.stopSequences)) {
+    const stop = config.stopSequences.filter((item: unknown) => typeof item === 'string');
+    if (stop.length > 0) payload.stop = stop;
+  }
+  const effort = reasoningEffortOption(effortOption, config);
+  if (effort) payload.reasoning_effort = effort;
+  return payload;
+}
+
+async function openAiCompatibleGenerate(
+  env: LlmEnv,
+  baseUrl: string,
+  model: string,
+  body: any
+): Promise<any> {
+  const keys = [env.LLM_API_KEY, env.LLM_API_KEY_2]
+    .map((key) => key?.trim())
+    .filter((key): key is string => Boolean(key));
+  if (keys.length === 0) throw missingKeyError('LLM_API_KEY');
+
+  const payload = toOpenAiPayload(model, body, env.LLM_REASONING_EFFORT);
 
   return withApiKeyFallback(keys, async (key) => {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const data = (await response.json().catch(() => ({}))) as any;
+    const send = (current: Record<string, unknown>) =>
+      fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify(current),
+      });
+
+    let response = await send(payload);
+    let data = (await response.json().catch(() => ({}))) as any;
+    if (response.status === 400) {
+      const detail = String(data?.error?.message || data?.message || '');
+      const rejected = OPTIONAL_PARAMS.find(
+        (param) => param in payload && new RegExp(`\\b${param}\\b`, 'i').test(detail)
+      );
+      if (rejected) {
+        console.warn(`[llm] ${baseUrl} ไม่รับ ${rejected} — ลองใหม่โดยไม่ส่งค่านี้`);
+        const retryPayload = { ...payload };
+        delete retryPayload[rejected];
+        response = await send(retryPayload);
+        data = (await response.json().catch(() => ({}))) as any;
+      }
+    }
     if (!response.ok) {
       const detail = data?.error?.message || data?.message || `error ${response.status}`;
       throw withStatus(
