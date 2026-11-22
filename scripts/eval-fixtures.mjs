@@ -292,6 +292,80 @@ function endsWithQuestion(text) {
   return QUESTION_MARKERS.test(closing);
 }
 
+// A validator that quietly accepts everything passes every fixture, so the
+// question check is tested against replies whose question is formatted in ways
+// real models actually produce (trailing quotes, brackets, emoji, blank lines)
+// and against replies that genuinely end without a question. The gate runs this
+// before it calls any provider: a broken check makes the whole report worthless.
+const SELF_CHECK_ANSWER = {
+  customerReply: 'ได้ค่ะ NO.1209 Fruit Symphony 1,390 บาท ค่ะ',
+  customerMood: 'สนใจ',
+  stageDetected: 3,
+  isDealClosed: false,
+  endedWithQuestion: true,
+  toneScore: 4,
+  sopAccuracyNote: 'แจ้งราคาและค่าส่งครบตาม SOP ค่ะ',
+  coachingTip: 'ควรถามชื่อผู้รับและช่วงเวลาจัดส่งด้วยค่ะ',
+};
+
+const QUESTION_CASES = [
+  { label: 'ลงท้าย ไหมคะ', text: 'ต้องการให้จัดส่งช่วงบ่ายวันนี้ไหมคะ', question: true },
+  { label: 'ลงท้าย ไหมคะ?', text: 'ต้องการให้จัดส่งช่วงบ่ายวันนี้ไหมคะ?', question: true },
+  {
+    label: 'ลงท้าย ไหมครับ + emoji',
+    text: 'ต้องการให้จัดส่งช่วงบ่ายวันนี้ไหมครับ 🎁',
+    question: true,
+  },
+  {
+    label: 'คำถาม + เครื่องหมายคำพูด',
+    text: 'ต้องการให้จัดส่งช่วงบ่ายวันนี้ไหมคะ"',
+    question: true,
+  },
+  {
+    label: 'คำถาม + วงเล็บและจุด',
+    text: 'ต้องการให้จัดส่งช่วงบ่ายวันนี้ไหมคะ (ช่วง 13.00–15.00).',
+    question: true,
+  },
+  { label: 'ลงท้ายด้วย ?', text: 'ต้องการให้จัดส่งช่วงบ่ายวันนี้ไหม ?', question: true },
+  {
+    label: 'ท้ายข้อความมีบรรทัดว่าง',
+    text: 'ต้องการให้จัดส่งช่วงบ่ายวันนี้ไหมคะ\n\n',
+    question: true,
+  },
+  { label: 'ลงท้าย เท่าไหร่ครับ', text: 'ค่าส่งระยะนี้เท่าไหร่ครับ', question: true },
+  {
+    label: 'มี emoji คั่นก่อนคำถามท้าย',
+    text: 'จัดส่งฟรีนะคะ 🎁 สะดวกวันไหนคะ',
+    question: true,
+  },
+  { label: 'ไม่มีคำถามเลย', text: 'ขอบคุณค่ะ แล้วพบกันใหม่นะคะ', question: false },
+  {
+    label: 'คำบอกคำถามอยู่นอกหน้าต่างท้ายข้อความ',
+    text: 'อะไรก็ได้ค่ะ ขอบคุณที่สนใจสินค้าของเรานะคะ ทางร้านจะรีบจัดเตรียมให้อย่างดีที่สุดและไว้พบกันใหม่นะคะ',
+    question: false,
+  },
+];
+
+// [" จบด้วยคำถาม" ต้องแยกคำตอบที่ดีออกจากคำตอบที่ไม่ถาม] — pure, no network.
+export function runSelfCheck() {
+  return QUESTION_CASES.map((testCase) => {
+    const checks = validateAnswer(
+      { endpoint: 'turn' },
+      JSON.stringify({ ...SELF_CHECK_ANSWER, betterExample: testCase.text })
+    );
+    const found = checks.find((check) => check.name === 'betterExample');
+    const actual = Boolean(found?.pass);
+    return {
+      name: testCase.label,
+      pass: actual === testCase.question,
+      detail:
+        actual === testCase.question
+          ? ''
+          : `คาดหวัง ${testCase.question ? 'ผ่าน' : 'ไม่ผ่าน'} แต่ได้ ${actual ? 'ผ่าน' : 'ไม่ผ่าน'}`,
+    };
+  });
+}
+
 const hasThai = (text) => /[\u0E00-\u0E7F]/.test(String(text ?? ''));
 
 function textCheck(name, value, { min = 1, max = Infinity, question = false } = {}) {

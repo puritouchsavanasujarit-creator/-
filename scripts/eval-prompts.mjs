@@ -14,7 +14,11 @@
 //
 // Every provider is configured the same way the app is: LLM_API_KEY switches to
 // an OpenAI-compatible endpoint (LLM_BASE_URL, LLM_MODEL), otherwise Gemini is
-// used. To compare providers in one run, pass --compare with:
+// used. Requests carry reasoning_effort only when LLM_REASONING_EFFORT asks for
+// it, since endpoints that do not accept the knob reject the whole call: low,
+// medium or high sends that level, auto translates the request's thinkingConfig
+// level, and unset (or off) omits the field. To compare providers in one run,
+// pass --compare with:
 //
 //   [
 //     { "label": "groq", "env": { "LLM_API_KEY": "$GROQ_API_KEY", "LLM_MODEL": "openai/gpt-oss-120b" } },
@@ -28,12 +32,17 @@
 // mentor/chat. /api/tools/search and /api/tools/maps are not covered — they need
 // Google grounding, which no fixture can mock.
 //
+// Before it calls any provider the gate runs its own self-check (the rule
+// validators, no network): a validator that accepts everything would make every
+// pass rate meaningless, so a failing self-check stops the run.
+//
 // Exit codes: 0 = every provider reached the pass threshold, 1 = a provider is
-// below it, 2 = configuration problem (missing key, bad --compare file).
+// below it or the gate's self-check failed, 2 = configuration problem (missing
+// key, bad --compare file).
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { selectLlmProvider, readGeneratedText } from '../src/shared/llmProvider.ts';
-import { EVAL_FIXTURES, buildRequest, validateAnswer } from './eval-fixtures.mjs';
+import { EVAL_FIXTURES, buildRequest, runSelfCheck, validateAnswer } from './eval-fixtures.mjs';
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MIN_PASS = 0.9;
@@ -50,14 +59,30 @@ const usage = () => {
   --compare <file>  เทียบหลาย provider ในรอบเดียว (ไฟล์ JSON ตามรูปแบบในหัวสคริปต์)
   --out <file>      เขียนผลลัพธ์เป็น JSON ลงไฟล์
   --json            พิมพ์ผลลัพธ์เป็น JSON แทนตาราง
+  --self-check      รันเฉพาะ self-check ของตัวตรวจ (ไม่เรียกโมเดล ไม่ต้องมีคีย์)
   -h, --help        แสดงข้อความนี้
 
 ผู้ให้บริการเลือกจาก env เหมือนแอปจริง: มี LLM_API_KEY → OpenAI-compatible
 (LLM_BASE_URL/LLM_MODEL) ไม่มี → Gemini (GEMINI_API_KEY)
 
+ตัวแปร env ที่มีผล
+  LLM_API_KEY, LLM_BASE_URL, LLM_MODEL  เลือก endpoint และโมเดล OpenAI-compatible
+  GEMINI_API_KEY                        ใช้เมื่อไม่มี LLM_API_KEY
+  LLM_REASONING_EFFORT                  คุม reasoning_effort ที่ส่งไป
+      low | medium | high               ส่งระดับนั้นทุก request
+      auto                              แปลงจาก thinkingConfig ของ request
+      ไม่ตั้ง / off                     ไม่ส่ง field นี้ (ค่าเริ่มต้น)
+                                        (endpoint ที่ไม่รับค่านี้จะตอบ 400)
+
+ก่อนวัด provider ทุกครั้งสคริปต์รัน self-check ของตัวตรวจเอง (ไม่ใช้เครือข่าย)
+ถ้า self-check ไม่ผ่าน จะหยุดทันทีเพื่อไม่ให้ผลวัดหลอก
+
+รันแค่ self-check ด้วยคำสั่งเดียว (ไม่ต้องมีคีย์):
+  bun run eval:self-check
+
 รหัสออก
   0  ทุก provider ผ่านเกณฑ์
-  1  มี provider ที่ต่ำกว่าเกณฑ์
+  1  มี provider ที่ต่ำกว่าเกณฑ์ หรือ self-check ของ gate ไม่ผ่าน
   2  ตั้งค่าไม่ครบ (ไม่มีคีย์ / ไฟล์ --compare ผิดรูปแบบ)`);
 };
 
@@ -71,6 +96,7 @@ function parseArgs(argv) {
     compare: '',
     out: '',
     json: false,
+    selfCheck: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -80,6 +106,10 @@ function parseArgs(argv) {
     }
     if (arg === '--json') {
       options.json = true;
+      continue;
+    }
+    if (arg === '--self-check') {
+      options.selfCheck = true;
       continue;
     }
     const value = argv[i + 1];
@@ -303,9 +333,58 @@ function printComparison(reports, minPass) {
 
 async function main() {
   let options;
-  let specs;
   try {
     options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`ตั้งค่าไม่ถูกต้อง: ${error.message}`);
+    process.exit(2);
+  }
+
+  // The rule validators decide every pass/fail below, so prove they still tell a
+  // good answer from a bad one before spending provider calls on them.
+  const selfChecks = runSelfCheck();
+  const selfCheckFailures = selfChecks.filter((check) => !check.pass);
+  const selfCheckSummary = {
+    total: selfChecks.length,
+    passed: selfChecks.length - selfCheckFailures.length,
+  };
+
+  // --self-check is the one command that tests the checks themselves: no key, no
+  // network, no provider — so the matrix can be run on its own in review or CI.
+  if (options.selfCheck) {
+    if (options.json) {
+      console.log(JSON.stringify({ selfCheck: selfCheckSummary, checks: selfChecks }, null, 2));
+    } else {
+      for (const check of selfChecks) {
+        console.log(
+          `${check.pass ? 'OK  ' : 'FAIL'}  ${check.name}${check.detail ? ` — ${check.detail}` : ''}`
+        );
+      }
+      console.log(
+        `\nself-check : ${selfCheckSummary.passed}/${selfCheckSummary.total} ผ่าน (ไม่ใช้เครือข่าย)`
+      );
+    }
+    process.exit(selfCheckFailures.length === 0 ? 0 : 1);
+  }
+
+  if (!options.json) {
+    console.log(
+      `self-check : ${selfCheckSummary.passed}/${selfCheckSummary.total} ผ่าน (ตัวตรวจ "จบด้วยคำถาม", ไม่ใช้เครือข่าย)`
+    );
+  }
+  if (selfCheckFailures.length > 0) {
+    for (const check of selfCheckFailures) {
+      console.error(`FAIL  ${check.name} — ${check.detail}`);
+    }
+    console.error(
+      `self-check ไม่ผ่าน ${selfCheckFailures.length}/${selfCheckSummary.total} เคส — ตัวตรวจเสีย ต้องแก้ก่อนวัด provider`
+    );
+    process.exit(1);
+  }
+  if (!options.json) console.log('');
+
+  let specs;
+  try {
     specs = loadSpecs(options);
   } catch (error) {
     console.error(`ตั้งค่าไม่ถูกต้อง: ${error.message}`);
@@ -332,6 +411,7 @@ async function main() {
       generatedAt: new Date().toISOString(),
       minPass: options.minPass,
       passed: gatePassed,
+      selfCheck: selfCheckSummary,
       providers: reports,
     };
     console.log(JSON.stringify(payload, null, 2));
@@ -359,6 +439,7 @@ async function main() {
           generatedAt: new Date().toISOString(),
           minPass: options.minPass,
           passed: gatePassed,
+          selfCheck: selfCheckSummary,
           providers: reports,
         },
         null,
