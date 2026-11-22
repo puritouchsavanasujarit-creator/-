@@ -1,0 +1,5 @@
+# Runner dependencies for agents/litellm/run_agent.py.
+# The harness CLIs themselves live in the sandbox image (see Dockerfile).
+litellm
+starlette
+uvicorn
