@@ -9,6 +9,7 @@ import {
   SHIFT_WORKFLOWS,
 } from '@/src/data/playbookData';
 import { PRODUCT_IMAGE_MAP } from '@/src/data/productImages';
+import { AgentFaqSection } from '@/src/components/AgentFaqSection';
 import {
   getOrderedChatIndices,
   getOrderedProductIds,
@@ -685,7 +686,10 @@ export function PlaybookView() {
         </div>
       </section>
 
-      {/* 5. Upsell & Chat Scripts */}
+      {/* 5. Agent shift FAQ */}
+      <AgentFaqSection search={search} />
+
+      {/* 6. Upsell & Chat Scripts */}
       <section className="space-y-3">
         <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex flex-wrap items-center justify-between gap-2">
           {isEditingHeading ? (
