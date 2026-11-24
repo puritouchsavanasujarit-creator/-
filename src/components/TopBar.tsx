@@ -39,7 +39,7 @@ export function TopBar({ activeTab, onSelectTab, streakSummary }: TopBarProps) {
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800 transition-colors">
-      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3 sm:gap-6">
+      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-2 sm:py-0 sm:min-h-[4rem] flex flex-wrap items-center justify-between gap-2 sm:gap-6">
         {/* Zone 1: Single-element wordmark */}
         <button
           type="button"
@@ -50,7 +50,7 @@ export function TopBar({ activeTab, onSelectTab, streakSummary }: TopBarProps) {
         </button>
 
         {/* Zone 2: 5 clean single-line text navigation links */}
-        <nav className="flex items-center gap-4 sm:gap-6 overflow-x-auto" aria-label="เมนูหลัก">
+        <nav className="w-full sm:w-auto flex items-center gap-4 sm:gap-6 overflow-x-auto" aria-label="เมนูหลัก">
           {NAV_ITEMS.map((item) => {
             const isActive = activeTab === item.id;
             return (
