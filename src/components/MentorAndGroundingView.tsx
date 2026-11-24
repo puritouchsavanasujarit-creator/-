@@ -8,6 +8,9 @@ import {
   Loader2,
   AlertTriangle,
   MessageSquare,
+  Pencil,
+  Check,
+  Copy,
 } from 'lucide-react';
 import { TRAINING_SCENARIOS } from '@/src/data/playbookData';
 import { useFirebaseAuth } from '@/src/contexts/FirebaseContext';
@@ -26,6 +29,7 @@ interface MentorMsg {
 
 interface SearchResult {
   answerMarkdown: string;
+  originalAnswerMarkdown?: string;
   sources: Array<{ title: string; uri: string }>;
   grounded?: boolean;
   notice?: string;
@@ -33,6 +37,7 @@ interface SearchResult {
 
 interface MapsResult {
   answerMarkdown: string;
+  originalAnswerMarkdown?: string;
   places: Array<{ title: string; uri: string; snippets: string[] }>;
   grounded?: boolean;
   notice?: string;
@@ -90,6 +95,12 @@ export function MentorAndGroundingView({ activeScenarioId }: { activeScenarioId:
   const [mapsError, setMapsError] = useState<string | null>(null);
   const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [activeToolTab, setActiveToolTab] = useState<'search' | 'maps'>('search');
+
+  const [isEditingSearch, setIsEditingSearch] = useState(false);
+  const [searchDraft, setSearchDraft] = useState('');
+  const [isEditingMaps, setIsEditingMaps] = useState(false);
+  const [mapsDraft, setMapsDraft] = useState('');
+  const [copiedTool, setCopiedTool] = useState<'search' | 'maps' | null>(null);
 
   useEffect(() => {
     if (!authReady || !user) {
@@ -203,6 +214,7 @@ export function MentorAndGroundingView({ activeScenarioId }: { activeScenarioId:
       if (!res.ok) {
         throw new Error(data.error || 'ไม่สามารถค้นหาข้อมูลจาก Google Search ได้');
       }
+      setIsEditingSearch(false);
       setSearchResult(data);
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการสืบค้นข้อมูล');
@@ -246,12 +258,85 @@ export function MentorAndGroundingView({ activeScenarioId }: { activeScenarioId:
       if (!res.ok) {
         throw new Error(data.error || 'ไม่สามารถค้นหาสถานที่ผ่าน Google Maps ได้');
       }
+      setIsEditingMaps(false);
       setMapsResult(data);
     } catch (err) {
       setMapsError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการค้นหาแผนที่');
     } finally {
       setIsSearchingMaps(false);
     }
+  };
+
+  const handleCopyResult = (kind: 'search' | 'maps', text: string) => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setCopiedTool(kind);
+    setTimeout(() => setCopiedTool((prev) => (prev === kind ? null : prev)), 1500);
+  };
+
+  const startEditSearch = () => {
+    if (!searchResult) return;
+    setSearchDraft(searchResult.answerMarkdown);
+    setIsEditingSearch(true);
+  };
+
+  const saveEditSearch = () => {
+    setSearchResult((prev) =>
+      prev
+        ? {
+            ...prev,
+            originalAnswerMarkdown: prev.originalAnswerMarkdown ?? prev.answerMarkdown,
+            answerMarkdown: searchDraft,
+          }
+        : prev
+    );
+    setIsEditingSearch(false);
+  };
+
+  const resetSearchAnswer = () => {
+    setSearchResult((prev) =>
+      prev && prev.originalAnswerMarkdown !== undefined
+        ? {
+            ...prev,
+            answerMarkdown: prev.originalAnswerMarkdown,
+            originalAnswerMarkdown: undefined,
+          }
+        : prev
+    );
+    setIsEditingSearch(false);
+  };
+
+  const startEditMaps = () => {
+    if (!mapsResult) return;
+    setMapsDraft(mapsResult.answerMarkdown);
+    setIsEditingMaps(true);
+  };
+
+  const saveEditMaps = () => {
+    setMapsResult((prev) =>
+      prev
+        ? {
+            ...prev,
+            originalAnswerMarkdown: prev.originalAnswerMarkdown ?? prev.answerMarkdown,
+            answerMarkdown: mapsDraft,
+          }
+        : prev
+    );
+    setIsEditingMaps(false);
+  };
+
+  const resetMapsAnswer = () => {
+    setMapsResult((prev) =>
+      prev && prev.originalAnswerMarkdown !== undefined
+        ? {
+            ...prev,
+            answerMarkdown: prev.originalAnswerMarkdown,
+            originalAnswerMarkdown: undefined,
+          }
+        : prev
+    );
+    setIsEditingMaps(false);
   };
 
   const currentScenario = TRAINING_SCENARIOS.find((s) => s.id === activeScenarioId);
@@ -469,8 +554,92 @@ export function MentorAndGroundingView({ activeScenarioId }: { activeScenarioId:
                         {searchResult.notice}
                       </div>
                     )}
-                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-line">
-                      {searchResult.answerMarkdown}
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                          ผลลัพธ์การสืบค้น
+                          {searchResult.originalAnswerMarkdown !== undefined &&
+                          searchResult.answerMarkdown !== searchResult.originalAnswerMarkdown
+                            ? ' · แก้ไขแล้ว'
+                            : ''}
+                        </span>
+                        {!isEditingSearch && (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyResult('search', searchResult.answerMarkdown)}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 cursor-pointer"
+                            >
+                              {copiedTool === 'search' ? (
+                                <>
+                                  <Check className="w-3 h-3" />
+                                  <span>คัดลอกแล้ว</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" />
+                                  <span>คัดลอก</span>
+                                </>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={startEditSearch}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>แก้ไข</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {isEditingSearch ? (
+                        <div className="space-y-2">
+                          <textarea
+                            rows={6}
+                            value={searchDraft}
+                            onChange={(e) => setSearchDraft(e.target.value)}
+                            aria-label="แก้ไขข้อความผลลัพธ์การสืบค้น"
+                            className="w-full resize-y rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-xs text-slate-900 dark:text-slate-100 leading-relaxed focus:border-emerald-600 dark:focus:border-emerald-500 focus:outline-none"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={saveEditSearch}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md cursor-pointer"
+                            >
+                              <Check className="w-3 h-3" />
+                              บันทึก
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsEditingSearch(false)}
+                              className="px-2.5 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                            >
+                              ยกเลิก
+                            </button>
+                            {searchResult.originalAnswerMarkdown !== undefined && (
+                              <button
+                                type="button"
+                                onClick={resetSearchAnswer}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                คืนค่าเดิม
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={startEditSearch}
+                          title="คลิกเพื่อแก้ไขข้อความ"
+                          className="leading-relaxed whitespace-pre-line cursor-pointer hover:text-slate-950 dark:hover:text-white"
+                        >
+                          {searchResult.answerMarkdown}
+                        </div>
+                      )}
                     </div>
                     {searchResult.sources.length > 0 && (
                       <div className="space-y-1.5">
@@ -564,8 +733,92 @@ export function MentorAndGroundingView({ activeScenarioId }: { activeScenarioId:
                         {mapsResult.notice}
                       </div>
                     )}
-                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-line">
-                      {mapsResult.answerMarkdown}
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                          ผลลัพธ์พิกัดจัดส่ง
+                          {mapsResult.originalAnswerMarkdown !== undefined &&
+                          mapsResult.answerMarkdown !== mapsResult.originalAnswerMarkdown
+                            ? ' · แก้ไขแล้ว'
+                            : ''}
+                        </span>
+                        {!isEditingMaps && (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyResult('maps', mapsResult.answerMarkdown)}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 cursor-pointer"
+                            >
+                              {copiedTool === 'maps' ? (
+                                <>
+                                  <Check className="w-3 h-3" />
+                                  <span>คัดลอกแล้ว</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" />
+                                  <span>คัดลอก</span>
+                                </>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={startEditMaps}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>แก้ไข</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {isEditingMaps ? (
+                        <div className="space-y-2">
+                          <textarea
+                            rows={6}
+                            value={mapsDraft}
+                            onChange={(e) => setMapsDraft(e.target.value)}
+                            aria-label="แก้ไขข้อความผลลัพธ์พิกัดจัดส่ง"
+                            className="w-full resize-y rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-xs text-slate-900 dark:text-slate-100 leading-relaxed focus:border-emerald-600 dark:focus:border-emerald-500 focus:outline-none"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={saveEditMaps}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md cursor-pointer"
+                            >
+                              <Check className="w-3 h-3" />
+                              บันทึก
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsEditingMaps(false)}
+                              className="px-2.5 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                            >
+                              ยกเลิก
+                            </button>
+                            {mapsResult.originalAnswerMarkdown !== undefined && (
+                              <button
+                                type="button"
+                                onClick={resetMapsAnswer}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                คืนค่าเดิม
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={startEditMaps}
+                          title="คลิกเพื่อแก้ไขข้อความ"
+                          className="leading-relaxed whitespace-pre-line cursor-pointer hover:text-slate-950 dark:hover:text-white"
+                        >
+                          {mapsResult.answerMarkdown}
+                        </div>
+                      )}
                     </div>
                     {mapsResult.places.length > 0 && (
                       <div className="space-y-2">

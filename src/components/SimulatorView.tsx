@@ -1173,9 +1173,17 @@ export function SimulatorView({
           )}
 
           {errorMsg && (
-            <div className="px-4 py-2.5 bg-rose-50 dark:bg-rose-950/60 border-t border-rose-200 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-200 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
-              <span>{errorMsg}</span>
+            <div className="px-4 py-2.5 bg-rose-50 dark:bg-rose-950/60 border-t border-rose-200 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-200 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400 mt-0.5" />
+              <span className="flex-1 min-w-0 break-words leading-relaxed">{errorMsg}</span>
+              <button
+                type="button"
+                onClick={() => setErrorMsg(null)}
+                aria-label="ปิดข้อความแจ้งเตือน"
+                className="p-0.5 text-rose-600 dark:text-rose-300 hover:text-rose-900 dark:hover:text-rose-100 rounded cursor-pointer shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </div>
           )}
 

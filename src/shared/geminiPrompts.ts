@@ -6,6 +6,8 @@ import {
 } from '../data/playbookData.ts';
 import type { TrainingScenario } from '../data/playbookData.ts';
 
+export type ChatPerspective = 'seller' | 'buyer';
+
 export interface ChatMessageInput {
   role: 'customer' | 'admin';
   text: string;
@@ -17,10 +19,6 @@ export interface MentorHistoryItem {
 }
 
 export type ThinkingName = 'LOW' | 'MEDIUM' | 'MINIMAL';
-
-// Which side of the chat the trainee plays. 'seller' keeps the original flow
-// (trainee = admin, AI = customer); 'buyer' flips it (trainee = customer, AI = salesperson).
-export type ChatPerspective = 'seller' | 'buyer';
 
 export interface GeminiSchema {
   type: string;
@@ -38,6 +36,7 @@ export const GEMINI_MODEL_CHAIN = [PRIMARY_MODEL, FALLBACK_MODEL] as const;
 export const GEMINI_MODELS = {
   hint: FALLBACK_MODEL,
   maps: PRIMARY_MODEL,
+  degraded: FALLBACK_MODEL,
 } as const;
 
 // Endpoints that prefer one model still need backups: start with their preferred
@@ -63,7 +62,7 @@ const RETRY_DELAY_MS = 600;
 
 // A slow model is as unavailable as a throttled one: after this long the request
 // moves to the next model instead of waiting for the primary to answer.
-export const MODEL_TIMEOUT_MS = 12_000;
+export const MODEL_TIMEOUT_MS = 16_000;
 
 // Short, tool-backed answers (search, maps, hint, evaluation) do not need a
 // long wait: a first model still silent after a few seconds is slower than
@@ -79,10 +78,9 @@ export const CHAT_MODEL_TIMEOUT_MS = 6_000;
 // Mentor answers are longer prose, so they get a little more room than a turn.
 export const MENTOR_MODEL_TIMEOUT_MS = 8_000;
 
-// Degraded mode already spent a round trip on the grounded call, and the models
-// it is about to reuse just failed there. Cut the first one short and keep the
-// backup at MODEL_TIMEOUT_MS: same two models, same backup chance, seconds less.
-export const DEGRADED_MODEL_TIMEOUT_MS = 3_000;
+// Degraded mode already spent a round trip on the grounded call, so the backup
+// model runs first with full budget and the fallback model gets a compact timeout.
+export const DEGRADED_MODEL_TIMEOUT_MS = 5_000;
 
 export class ModelTimeoutError extends Error {
   constructor(timeoutMs: number) {
@@ -91,7 +89,13 @@ export class ModelTimeoutError extends Error {
   }
 }
 
-export type ModelFailureReason = 'timeout' | 'throttled' | 'unavailable' | 'overloaded' | 'error';
+export type ModelFailureReason =
+  | 'timeout'
+  | 'throttled'
+  | 'unauthorized'
+  | 'unavailable'
+  | 'overloaded'
+  | 'error';
 
 export interface ModelAttemptFailure {
   model: string;
@@ -113,11 +117,25 @@ export function describeModelFailure(error: unknown): { reason: ModelFailureReas
   // A key chain keeps the reason of its last key, so the model failure reads as
   // "throttled" rather than re-deriving it from the summary text.
   if (error instanceof ApiKeyChainError) return { reason: error.reason, detail };
+  const status = (error as { status?: number } | null)?.status;
   const lower = message.toLowerCase();
-  if (lower.includes('429') || lower.includes('resource_exhausted')) {
+  if (status === 429 || lower.includes('429') || lower.includes('resource_exhausted')) {
     return { reason: 'throttled', detail };
   }
-  if (lower.includes('503') || lower.includes('unavailable')) {
+  if (
+    status === 401 ||
+    status === 403 ||
+    lower.includes('401') ||
+    lower.includes('unauthenticated') ||
+    lower.includes('api key not valid') ||
+    lower.includes('api_key_invalid') ||
+    lower.includes('access_token_type_unsupported') ||
+    lower.includes('403') ||
+    lower.includes('permission_denied')
+  ) {
+    return { reason: 'unauthorized', detail };
+  }
+  if (status === 503 || lower.includes('503') || lower.includes('unavailable')) {
     return { reason: 'unavailable', detail };
   }
   if (lower.includes('high demand') || lower.includes('overloaded')) {
@@ -211,14 +229,17 @@ export async function withModelFallback<T>(
         const { reason, detail } = describeModelFailure(error);
         attempts.push({ model, attempt: attempt + 1, timeoutMs: attemptTimeoutMs, reason, detail });
         if (label) {
-          console.warn(
+          console.log(
             `[${label}] model=${model} attempt=${attempt + 1} failed=${reason} after_ms=${
               Date.now() - attemptStartedAt
             } detail="${detail}"`
           );
         }
         if (action === 'throw') throw error;
-        if (action === 'fallback') break;
+        const isLastModel = index === models.length - 1;
+        const canRetryLastModel =
+          isLastModel && (reason === 'unavailable' || reason === 'overloaded');
+        if (action === 'fallback' && !canRetryLastModel) break;
         if (attempt < RETRIES_PER_MODEL) {
           await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
         }
@@ -226,7 +247,7 @@ export async function withModelFallback<T>(
     }
   }
   if (label) {
-    console.warn(
+    console.log(
       `[${label}] all_models_failed tried=${attempts.length} total_ms=${Date.now() - startedAt} failures=${
         new ModelChainError(attempts, lastError).summary
       }`
@@ -293,13 +314,11 @@ export function formatTranscript(
   messages: ChatMessageInput[],
   perspective: ChatPerspective = 'seller'
 ): string {
-  const label = (role: ChatMessageInput['role']): string => {
-    if (perspective === 'buyer') {
-      return role === 'customer' ? 'ลูกค้า (ผู้ฝึก/ฝ่ายซื้อ)' : 'พนักงานขาย';
-    }
-    return role === 'customer' ? 'ลูกค้า' : 'แอดมิน (ผู้ฝึก)';
-  };
-  return messages.map((m, idx) => `[${idx + 1}] ${label(m.role)}: ${m.text}`).join('\n');
+  const customerLabel = perspective === 'buyer' ? 'ลูกค้า (ผู้ฝึก)' : 'ลูกค้า';
+  const adminLabel = perspective === 'buyer' ? 'แอดมิน (พนักงานขาย)' : 'แอดมิน (ผู้ฝึก)';
+  return messages
+    .map((m, idx) => `[${idx + 1}] ${m.role === 'customer' ? customerLabel : adminLabel}: ${m.text}`)
+    .join('\n');
 }
 
 // How a key-chain outcome should be handled, shared by the model chain.
@@ -307,8 +326,8 @@ function classifyReason(reason: ModelFailureReason): FailureAction {
   switch (reason) {
     case 'timeout':
     case 'throttled':
-      return 'fallback';
     case 'unavailable':
+      return 'fallback';
     case 'overloaded':
       return 'retry';
     default:
@@ -317,23 +336,36 @@ function classifyReason(reason: ModelFailureReason): FailureAction {
 }
 
 // Grounding (Search/Maps) has its own quota, separate from normal generation.
-// Every configured Gemini key, primary first, blanks dropped.
+// Every configured Gemini key, primary first, blanks and placeholders dropped.
 export function geminiApiKeys(...keys: Array<string | undefined>): string[] {
-  return keys.map((key) => key?.trim()).filter((key): key is string => Boolean(key));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of keys) {
+    const key = raw?.trim();
+    if (!key || key === 'MY_GEMINI_API_KEY' || seen.has(key)) continue;
+    seen.add(key);
+    result.push(key);
+  }
+  return result;
 }
 
-// A throttled or rejected key says nothing about the model or the request, so the
-// same call can move to the backup key. Anything else must surface unchanged.
+// A throttled or rejected/invalid key says nothing about the model or the
+// request, so the same call can move to the backup key. Anything else must
+// surface unchanged.
 export function apiKeyRotationAllowed(error: unknown): boolean {
   const status = (error as { status?: number } | null)?.status;
-  if (status === 429 || status === 403) return true;
+  if (status === 429 || status === 403 || status === 401) return true;
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return (
     message.includes('429') ||
     message.includes('resource_exhausted') ||
     message.includes('403') ||
     message.includes('permission_denied') ||
-    message.includes('api_key_invalid')
+    message.includes('401') ||
+    message.includes('unauthenticated') ||
+    message.includes('api_key_invalid') ||
+    message.includes('api key not valid') ||
+    message.includes('access_token_type_unsupported')
   );
 }
 
@@ -362,7 +394,8 @@ export class ApiKeyChainError extends Error {
   }
 
   get reason(): ModelFailureReason {
-    return this.failures[this.failures.length - 1].reason;
+    const nonUnauthorized = [...this.failures].reverse().find((f) => f.reason !== 'unauthorized');
+    return nonUnauthorized ? nonUnauthorized.reason : this.failures[this.failures.length - 1].reason;
   }
 
   // Compact form for logs: `คีย์#1=throttled, คีย์#2=throttled`.
@@ -371,8 +404,15 @@ export class ApiKeyChainError extends Error {
   }
 }
 
-// Runs `run` with the first key and, if that key is exhausted or rejected, again
-// with the next one. One key means one attempt, exactly as before.
+const KEY_COOLDOWN_MS: Partial<Record<ModelFailureReason, number>> = {
+  unauthorized: 10 * 60_000,
+  throttled: 30_000,
+};
+
+const keyCooldowns = new Map<unknown, { until: number; reason: ModelFailureReason }>();
+
+// Runs `run` with healthy keys first and, if a key is exhausted or rejected,
+// demotes it for a cooldown and tries the next key. One key means one attempt.
 export async function withApiKeyFallback<T, K>(
   keys: readonly K[],
   run: (key: K) => Promise<T>
@@ -380,24 +420,68 @@ export async function withApiKeyFallback<T, K>(
   if (keys.length === 0) {
     throw new Error('ไม่พบ GEMINI_API_KEY ในระบบ กรุณาตรวจสอบการตั้งค่า Secrets');
   }
+  const now = Date.now();
+  const indexed = keys.map((key, index) => ({
+    key,
+    slot: index + 1,
+    cooldown: keyCooldowns.get(key),
+  }));
+  const healthy = indexed.filter((item) => !item.cooldown || item.cooldown.until <= now);
+  const nonUnauthorizedCooldown = indexed
+    .filter(
+      (item) =>
+        item.cooldown && item.cooldown.until > now && item.cooldown.reason !== 'unauthorized'
+    )
+    .sort((a, b) => (a.cooldown?.until ?? 0) - (b.cooldown?.until ?? 0));
+  const unauthorizedCooldown = indexed
+    .filter(
+      (item) =>
+        item.cooldown && item.cooldown.until > now && item.cooldown.reason === 'unauthorized'
+    )
+    .sort((a, b) => (a.cooldown?.until ?? 0) - (b.cooldown?.until ?? 0));
+
+  // Try healthy keys first; if none are healthy, try recoverable keys without
+  // rotating into known-unauthorized keys (which would mask a 429/503 as a 401).
+  // Only fall back to unauthorized keys when every key is marked unauthorized.
+  const ordered =
+    healthy.length > 0
+      ? healthy
+      : nonUnauthorizedCooldown.length > 0
+        ? nonUnauthorizedCooldown
+        : unauthorizedCooldown;
+
   const failures: ApiKeyFailure[] = [];
   let lastError: unknown;
-  for (const [index, key] of keys.entries()) {
+  let preferredError: unknown;
+  for (const [pos, entry] of ordered.entries()) {
     try {
-      return await run(key);
+      const result = await run(entry.key);
+      keyCooldowns.delete(entry.key);
+      return result;
     } catch (error) {
       lastError = error;
       const { reason } = describeModelFailure(error);
-      failures.push({ key: index + 1, reason });
+      if (reason !== 'unauthorized' || preferredError === undefined) {
+        preferredError = error;
+      }
+      failures.push({ key: entry.slot, reason });
+      const cooldownMs = KEY_COOLDOWN_MS[reason];
+      if (cooldownMs) {
+        if (keyCooldowns.size > 16) keyCooldowns.clear();
+        keyCooldowns.set(entry.key, { until: Date.now() + cooldownMs, reason });
+      }
       // The last key, or a failure another key cannot fix: stop here.
-      if (index + 1 >= keys.length || !apiKeyRotationAllowed(error)) break;
-      console.warn(`[gemini] key=#${index + 1} failed (${reason}), trying key=#${index + 2}`);
+      if (pos + 1 >= ordered.length || !apiKeyRotationAllowed(error)) break;
+      console.log(
+        `[gemini] key=#${entry.slot} failed (${reason}), trying key=#${ordered[pos + 1].slot}`
+      );
     }
   }
+  const reportedError = preferredError ?? lastError;
   // Name the key slots whenever the failure was about a key or a key switch was
   // tried; a genuine request error keeps its own message untouched.
-  const keyLevel = failures.length > 1 || apiKeyRotationAllowed(lastError);
-  throw keyLevel ? new ApiKeyChainError(failures, lastError) : lastError;
+  const keyLevel = failures.length > 1 || apiKeyRotationAllowed(reportedError);
+  throw keyLevel ? new ApiKeyChainError(failures, reportedError) : reportedError;
 }
 
 // Only 429/503 may switch to a non-grounded retry; any other error must surface
@@ -451,6 +535,21 @@ export function groundingFallback(kind: keyof typeof GROUNDING_NOTICES, error: u
   };
 }
 
+function extractCleanErrorText(errMsg: string): string {
+  const trimmed = errMsg.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: { message?: string } };
+      if (parsed?.error?.message) {
+        return parsed.error.message;
+      }
+    } catch {
+      // Ignore parse failures and fall back to raw message
+    }
+  }
+  return errMsg;
+}
+
 export function formatGeminiError(error: unknown): { status: number; message: string } {
   if (error instanceof ApiKeyChainError) {
     const base = formatGeminiError(error.lastError);
@@ -466,18 +565,22 @@ export function formatGeminiError(error: unknown): { status: number; message: st
     };
   }
   const errMsg = error instanceof Error ? error.message : String(error);
+  const lower = errMsg.toLowerCase();
   if (
-    errMsg.includes('API_KEY_INVALID') ||
-    errMsg.includes('PERMISSION_DENIED') ||
-    errMsg.includes('401') ||
-    errMsg.includes('403')
+    lower.includes('api_key_invalid') ||
+    lower.includes('api key not valid') ||
+    lower.includes('access_token_type_unsupported') ||
+    lower.includes('permission_denied') ||
+    lower.includes('unauthenticated') ||
+    lower.includes('401') ||
+    lower.includes('403')
   ) {
     return {
-      status: 403,
-      message: 'API Key ไม่ถูกต้องหรือยังไม่ได้ตั้งค่า กรุณาตรวจสอบในเมนู Settings > Secrets',
+      status: lower.includes('401') || lower.includes('unauthenticated') ? 401 : 403,
+      message: 'API Key ไม่ถูกต้องหรือหมดอายุ กรุณาตรวจสอบค่า GEMINI_API_KEY ในเมนู Settings > Secrets',
     };
   }
-  if (errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429')) {
+  if (lower.includes('resource_exhausted') || lower.includes('429')) {
     return {
       status: 429,
       message: 'ขณะนี้มีการใช้งานเกินโควตาชั่วคราว กรุณารอสักครู่แล้วลองใหม่อีกครั้ง',
@@ -485,7 +588,7 @@ export function formatGeminiError(error: unknown): { status: number; message: st
   }
   return {
     status: 500,
-    message: errMsg || 'เกิดข้อผิดพลาดในการเชื่อมต่อระบบ AI Coach',
+    message: extractCleanErrorText(errMsg) || 'เกิดข้อผิดพลาดในการเชื่อมต่อระบบ AI Coach',
   };
 }
 
@@ -495,12 +598,44 @@ export function buildChatTurnPrompt(
   currentStage?: number,
   perspective: ChatPerspective = 'seller'
 ): string {
-  if (perspective === 'buyer') {
-    return buildBuyerTurnPrompt(scenario, messages, currentStage);
-  }
-
   const knowledge = buildKnowledgeContext();
-  const transcript = formatTranscript(messages);
+  const transcript = formatTranscript(messages, perspective);
+
+  if (perspective === 'buyer') {
+    return `
+คุณทำหน้าที่ 2 บทบาทพร้อมกันในรูปแบบ JSON (โหมดสลับบทบาท: ผู้ฝึกสวมบทบาทเป็น "ลูกค้า/ฝ่ายซื้อ", AI สวมบทบาทเป็น "พนักงานขาย Admin Sale"):
+บทบาทที่ 1: สวมบทบาทเป็น "พนักงานขาย (Admin Sale)" ของร้าน Premium Fruit Delivery ที่เชี่ยวชาญคู่มือ SOP ตอบแชทลูกค้าอย่างสุภาพ อบอุ่น แม่นยำเรื่องราคา ค่าจัดส่ง ผลไม้ตามฤดูกาล และ "ทิ้งคำถามไว้ท้ายประโยคเสมอ"
+บทบาทที่ 2: เป็น "โค้ชฝึกสื่อสารฝ่ายซื้อ (Live Coach)" ที่ประเมินข้อความล่าสุดของลูกค้า (ผู้ฝึก) ว่าสื่อสารความต้องการครบถ้วน สุภาพ และตั้งคำถาม/เปิดช่องให้พนักงานขายตอบต่อได้ดีหรือไม่
+
+ข้อมูลสถานการณ์:
+ชื่อเคส: ${scenario.title}
+ช่องทาง: ${scenario.channel} | ช่วงเวลา: ${scenario.shiftTime}
+ระยะทางจัดส่ง: ${scenario.distanceKm} กม. | งบประมาณลูกค้า: ~${scenario.budgetHint} บาท
+บริบทลูกค้าที่ผู้ฝึกกำลังสวมบทบาท:
+${scenario.customerPersonaPrompt}
+
+เช็คลิสต์สำคัญของเคสนี้:
+${scenario.keyCheckpoints.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+${knowledge}
+
+ขั้นตอนปัจจุบันก่อนหน้านี้: ขั้นที่ ${currentStage || 1} จาก 6 (${SALES_STAGES.map((s) => `${s.step}.${s.label}`).join(' -> ')})
+
+ประวัติแชททั้งหมด:
+${transcript}
+
+คำแนะนำในการสร้าง JSON ตอบกลับ:
+- customerReply: คำตอบของ "พนักงานขาย (AI)" ในรอบถัดไปเป็นภาษาไทยธรรมชาติ (1-3 ประโยค) สุภาพ ชัดเจน ถูกต้องตามคู่มือร้าน และทิ้งคำถามไว้ท้ายประโยคเพื่อให้ลูกค้าตอบต่อ
+- customerMood: ท่าที/อารมณ์ของพนักงานขาย 1 คำ เช่น "กระตือรือร้น", "สุภาพ", "ช่วยเหลือดี", "ใส่ใจ", "มืออาชีพ"
+- stageDetected: หมายเลขขั้นตอนปัจจุบัน (1 ถึง 6) ตาม Flow การขาย
+- isDealClosed: true เมื่อตกลงสั่งซื้อและให้ข้อมูลครบถ้วนแล้ว มิฉะนั้น false
+- endedWithQuestion: true ถ้าข้อความล่าสุดของผู้ฝึก (ฝ่ายซื้อ) มีคำถามหรือคำขอที่ชัดเจนให้พนักงานขายตอบต่อ, false ถ้าจบแบบไม่มีประเด็นต่อ
+- toneScore: คะแนนความสุภาพและความชัดเจนในการสื่อสารของข้อความล่าสุดจากผู้ฝึก (1 ถึง 5)
+- sopAccuracyNote: สรุปสั้นๆ 1 ประโยคว่าข้อความล่าสุดของผู้ฝึกให้ข้อมูลหรือเช็คประเด็นสำคัญตามเคสนี้ครบหรือยังขาดจุดใด (เช่น งบประมาณ, สถานที่, วันเวลา, ฤดูกาล, ค่าส่ง, เงื่อนไขเร่งด่วน)
+- coachingTip: คำแนะนำสั้นๆ 1-2 ประโยคสำหรับผู้ฝึกในฐานะฝ่ายซื้อว่าควรถามหรือให้ข้อมูลอะไรต่อ
+- betterExample: ตัวอย่างประโยคที่ผู้ฝึก (ฝ่ายซื้อ) ควรพิมพ์ในจังหวะนี้เพื่อให้ได้ข้อมูลครบถ้วน สุภาพ และจบด้วยคำถามเสมอ
+`;
+  }
 
   return `
 คุณทำหน้าที่ 2 บทบาทพร้อมกันในรูปแบบ JSON:
@@ -537,49 +672,6 @@ ${transcript}
 `;
 }
 
-export function buildBuyerTurnPrompt(
-  scenario: TrainingScenario,
-  messages: ChatMessageInput[],
-  currentStage?: number
-): string {
-  const knowledge = buildKnowledgeContext();
-  const transcript = formatTranscript(messages, 'buyer');
-
-  return `
-คุณทำหน้าที่ 2 บทบาทพร้อมกันในรูปแบบ JSON:
-บทบาทที่ 1: สวมบทบาทเป็น "พนักงานขาย (Admin Sale)" ของร้าน Premium Fruit Delivery ที่ตอบแชทลูกค้าอย่างมืออาชีพตามคู่มือร้าน (ผู้ฝึกกำลังสวมบทบาทเป็นลูกค้า/ฝ่ายซื้อ)
-บทบาทที่ 2: เป็น "โค้ชฝึกฝ่ายจัดซื้อ" ที่ประเมินข้อความล่าสุดของฝ่ายซื้อ (ผู้ฝึก) ว่าถามครบและตัดสินใจอย่างมีข้อมูลหรือไม่
-
-ข้อมูลสถานการณ์:
-ชื่อเคส: ${scenario.title}
-ช่องทาง: ${scenario.channel} | ช่วงเวลา: ${scenario.shiftTime}
-ระยะทางจัดส่ง: ${scenario.distanceKm} กม. | งบประมาณลูกค้า: ~${scenario.budgetHint} บาท
-Persona ลูกค้าที่ผู้ฝึกสวมบทบาท:
-${scenario.customerPersonaPrompt}
-
-เช็คลิสต์สำคัญของเคสนี้ (ใช้เป็นข้อมูลที่พนักงานขายควรแจ้ง/ขอจากลูกค้า):
-${scenario.keyCheckpoints.map((c, i) => `${i + 1}. ${c}`).join('\n')}
-
-${knowledge}
-
-ขั้นตอนปัจจุบันก่อนหน้านี้: ขั้นที่ ${currentStage || 1} จาก 6 (${SALES_STAGES.map((s) => `${s.step}.${s.label}`).join(' -> ')})
-
-ประวัติแชททั้งหมด (role customer = ผู้ฝึก/ฝ่ายซื้อ, role admin = คุณ/พนักงานขาย):
-${transcript}
-
-คำแนะนำในการสร้าง JSON ตอบกลับ:
-- customerReply: คำตอบของพนักงานขายในรอบถัดไปเป็นภาษาไทยธรรมชาติ สุภาพ (1-3 ประโยค) ตาม Flow การขาย ให้ข้อมูลถูกต้องตามคู่มือ และทิ้งคำถามชวนคุยไว้ท้ายประโยคเสมอ
-- customerMood: สภาพอารมณ์ของพนักงานขาย 1 คำ เช่น "สุภาพ", "กระตือรือร้น", "ลังเล", "หนักแน่น"
-- stageDetected: หมายเลขขั้นตอนการขายปัจจุบัน (1 ถึง 6) ตาม Flow
-- isDealClosed: true เมื่อฝ่ายซื้อตกลงสั่งซื้อและให้ข้อมูลครบถ้วนแล้ว มิฉะนั้น false
-- endedWithQuestion: true ถ้าข้อความล่าสุดของฝ่ายซื้อมีคำถามหรือข้อมูลที่ทำให้พนักงานขายตอบต่อได้, false ถ้าไม่มี
-- toneScore: คะแนนความสุภาพ ชัดเจน และตรงประเด็นของข้อความล่าสุดของฝ่ายซื้อ (1 ถึง 5)
-- sopAccuracyNote: สรุปสั้นๆ 1 ประโยคว่าข้อความล่าสุดของฝ่ายซื้อถาม/ตรวจข้อมูลสำคัญครบหรือไม่ (โอกาสใช้งาน งบประมาณ สถานที่/ผู้รับ ช่วงเวลาจัดส่ง การชำระเงิน)
-- coachingTip: คำแนะนำเชิงสร้างสรรค์สั้นๆ 1-2 ประโยคสำหรับฝ่ายซื้อในรอบถัดไป
-- betterExample: ตัวอย่างประโยคที่ฝ่ายซื้อควรถามในจังหวะนี้ (กระชับ สุภาพ และได้ข้อมูลที่จำเป็น)
-`;
-}
-
 export function buildHintPrompt(
   scenario: TrainingScenario,
   messages: ChatMessageInput[],
@@ -591,16 +683,15 @@ export function buildHintPrompt(
 
   if (perspective === 'buyer') {
     return `
-คุณเป็นโค้ชฝ่ายจัดซื้อของร้าน Premium Fruit Delivery
-ผู้ฝึกกำลังรับบทเป็นลูกค้า/ฝ่ายซื้อในเคส "${scenario.title}" (ขั้นตอนการขายปัจจุบัน: ${currentStage || 1}/6)
-จากประวัติแชทล่าสุด กรุณาให้คำแนะนำสั้นๆ ว่าฝ่ายซื้อควรถามหรือตรวจสอบข้อมูลอะไรเพิ่มในจังหวะนี้ และให้ร่างประโยคถามที่สุภาพ ชัดเจน ทิ้งคำถามไว้ให้พนักงานขายตอบเสมอ
+คุณเป็นโค้ชฝึกการสื่อสารสำหรับโหมด "ฝ่ายซื้อ (ลูกค้า)" ในเคส "${scenario.title}" (ขั้นตอนปัจจุบัน: ${currentStage || 1}/6)
+จากประวัติแชทล่าสุด กรุณาแนะนำผู้ฝึกว่าในบทบาทลูกค้าควรสอบถามหรือระบุรายละเอียดใดเพิ่มเติมกับพนักงานขาย (เช่น งบประมาณ สถานที่ ช่วงเวลา ค่าส่ง เงื่อนไขผลไม้ตามฤดูกาล หรือเอกสาร E-Tax) พร้อมร่างประโยคตัวอย่างที่สุภาพ ชัดเจน และจบด้วยคำถามเสมอ
 
 ${knowledge}
 
 เช็คลิสต์ของเคสนี้:
 ${scenario.keyCheckpoints.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-บทสนทนาปัจจุบัน (role customer = ผู้ฝึก/ฝ่ายซื้อ, role admin = พนักงานขาย):
+บทสนทนาปัจจุบัน:
 ${transcript}
 `;
   }

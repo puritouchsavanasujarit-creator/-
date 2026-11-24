@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import {
   CHAT_TURN_SCHEMA,
   EVALUATION_SCHEMA,
+  GEMINI_MODELS,
   HINT_SCHEMA,
   THINKING_LEVELS,
   buildChatTurnPrompt,
@@ -22,6 +23,7 @@ import {
   findScenario,
   formatGeminiError,
   groundingFallback,
+  modelChainStartingWith,
   parseGeminiJson,
   CHAT_MODEL_TIMEOUT_MS,
   DEGRADED_MODEL_TIMEOUT_MS,
@@ -35,8 +37,16 @@ import type {
   ChatPerspective,
   MentorHistoryItem,
 } from './src/shared/geminiPrompts.ts';
-import { readGeneratedText, selectLlmProvider, type LlmEnv } from './src/shared/llmProvider.ts';
-import { isExaConfigured, searchWeb, searchWebSources } from './src/shared/exaSearch.ts';
+import { readGeneratedText, selectLlmProvider } from './src/shared/llmProvider.ts';
+import {
+  ExaAuthError,
+  ExaUnconfiguredError,
+  isExaConfigured,
+  searchWeb,
+  searchWebSources,
+} from './src/shared/exaSearch.ts';
+import { TRAINING_SCENARIOS } from './src/data/playbookData.ts';
+import { BUILD_ID } from './src/shared/buildStamp.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,25 +69,17 @@ const envPort =
 const PORT = Number.isFinite(cliPort) && cliPort > 0 ? cliPort : envPort || 3000;
 const HOST = getArgValue('--host') || '0.0.0.0';
 
-// The dev server reads the same provider configuration as the deployed worker.
-const llmEnv: LlmEnv = {
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-  GEMINI_API_KEY_2: process.env.GEMINI_API_KEY_2,
-  LLM_API_KEY: process.env.LLM_API_KEY,
-  LLM_API_KEY_2: process.env.LLM_API_KEY_2,
-  LLM_BASE_URL: process.env.LLM_BASE_URL,
-  LLM_MODEL: process.env.LLM_MODEL,
-  LLM_MODEL_2: process.env.LLM_MODEL_2,
-};
-
 async function createApp() {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
+    const provider = selectLlmProvider(process.env);
     res.json({
       ok: true,
-      llmProvider: selectLlmProvider(llmEnv).label,
+      buildId: BUILD_ID,
+      scenarioIds: TRAINING_SCENARIOS.map((scenario) => scenario.id),
+      llmProvider: provider.label,
       llmApiKeyConfigured: Boolean(process.env.LLM_API_KEY),
       geminiApiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
       geminiApiKey2Configured: Boolean(process.env.GEMINI_API_KEY_2),
@@ -106,8 +108,7 @@ async function createApp() {
       }
 
       const traineeRole = perspective === 'buyer' ? 'customer' : 'admin';
-      const lastTraineeMessage = [...messages].reverse().find((m) => m.role === traineeRole);
-      if (!lastTraineeMessage) {
+      if (!messages.some((m) => m.role === traineeRole)) {
         res.status(400).json({
           error:
             perspective === 'buyer'
@@ -117,7 +118,7 @@ async function createApp() {
         return;
       }
 
-      const provider = selectLlmProvider(llmEnv);
+      const provider = selectLlmProvider(process.env);
       const body = {
         contents: [
           {
@@ -140,9 +141,9 @@ async function createApp() {
         'chat/turn'
       );
       console.log(
-        `[chat/turn] provider=${provider.kind} model_ms=${
-          Date.now() - modelStartedAt
-        } total_ms=${Date.now() - startedAt}`
+        `[chat/turn] provider=${provider.kind} model_ms=${Date.now() - modelStartedAt} total_ms=${
+          Date.now() - startedAt
+        }`
       );
 
       res.json(parseGeminiJson(readGeneratedText(data)));
@@ -168,7 +169,7 @@ async function createApp() {
         return;
       }
 
-      const provider = selectLlmProvider(llmEnv);
+      const provider = selectLlmProvider(process.env);
       const modelStartedAt = Date.now();
       const data = await withModelFallback(
         provider.hintModels,
@@ -215,7 +216,7 @@ async function createApp() {
         return;
       }
 
-      const provider = selectLlmProvider(llmEnv);
+      const provider = selectLlmProvider(process.env);
       const body = {
         contents: [{ role: 'user', parts: [{ text: buildEvaluationPrompt(scenario, messages) }] }],
         generationConfig: {
@@ -233,9 +234,7 @@ async function createApp() {
         'chat/evaluate'
       );
       console.log(
-        `[chat/evaluate] model_ms=${Date.now() - modelStartedAt} total_ms=${
-          Date.now() - startedAt
-        }`
+        `[chat/evaluate] model_ms=${Date.now() - modelStartedAt} total_ms=${Date.now() - startedAt}`
       );
 
       res.json(parseGeminiJson(readGeneratedText(data)));
@@ -266,11 +265,13 @@ async function createApp() {
         { role: 'user' as const, parts: [{ text: message.trim() }] },
       ];
 
-      const provider = selectLlmProvider(llmEnv);
+      const provider = selectLlmProvider(process.env);
       const body = {
         contents,
         systemInstruction: { parts: [{ text: buildMentorSystemInstruction(scenario) }] },
-        generationConfig: { thinkingConfig: { thinkingLevel: THINKING_LEVELS.mentor } },
+        generationConfig: {
+          thinkingConfig: { thinkingLevel: THINKING_LEVELS.mentor },
+        },
       };
       const modelStartedAt = Date.now();
       const data = await withModelFallback(
@@ -290,8 +291,7 @@ async function createApp() {
     }
   });
 
-  // Live search: Google Search grounding on Gemini; on another provider the
-  // answer comes from model knowledge with Exa reference links when configured.
+  // Google Search Grounding for live fruit seasonality, etiquette, hospital delivery info
   app.post('/api/tools/search', async (req: Request, res: Response) => {
     const startedAt = Date.now();
     try {
@@ -301,7 +301,7 @@ async function createApp() {
         return;
       }
 
-      const provider = selectLlmProvider(llmEnv);
+      const provider = selectLlmProvider(process.env);
       const body = {
         contents: [{ role: 'user', parts: [{ text: query.trim() }] }],
         systemInstruction: { parts: [{ text: buildSearchSystemInstruction() }] },
@@ -331,22 +331,24 @@ async function createApp() {
         return;
       } catch (groundingError) {
         // Grounding quota is exhausted (or the provider has no Google Search):
-        // answer without live sources and attach backup links from Exa when it is
-        // configured.
+        // answer without live sources and attach backup links from Exa when configured.
         const fallback = groundingFallback('search', groundingError);
         const fallbackStartedAt = Date.now();
+        const degradedModels =
+          provider.kind === 'gemini'
+            ? modelChainStartingWith(GEMINI_MODELS.degraded)
+            : provider.models;
         const [data, sources] = await Promise.all([
           withModelFallback(
-            provider.models,
+            degradedModels,
             (model) => provider.generate(model, body),
-            DEGRADED_MODEL_TIMEOUT_MS,
             MODEL_TIMEOUT_MS,
+            DEGRADED_MODEL_TIMEOUT_MS,
             'search'
           ),
           searchWebSources(query.trim()),
         ]);
 
-        // Where the fallback time goes, so a slow phase is visible in the logs.
         console.log(
           `[search] grounding=${fallback.groundingStatus} grounded_ms=${
             fallbackStartedAt - groundedStartedAt
@@ -382,14 +384,19 @@ async function createApp() {
       res.json(result);
     } catch (error) {
       console.log(`[web-search] failed total_ms=${Date.now() - startedAt} error=${String(error)}`);
+      const status =
+        error instanceof ExaAuthError
+          ? 401
+          : error instanceof ExaUnconfiguredError
+            ? 400
+            : 500;
       res
-        .status(500)
+        .status(status)
         .json({ error: error instanceof Error ? error.message : 'ไม่สามารถค้นหาเว็บด้วย Exa ได้' });
     }
   });
 
-  // Delivery locations: Google Maps grounding on Gemini; elsewhere the answer is
-  // model knowledge with no live place data.
+  // Google Maps Grounding for checking delivery locations, hospitals, and routes
   app.post('/api/tools/maps', async (req: Request, res: Response) => {
     const startedAt = Date.now();
     try {
@@ -402,10 +409,8 @@ async function createApp() {
         return;
       }
 
-      const provider = selectLlmProvider(llmEnv);
-      const body = {
-        contents: [{ role: 'user', parts: [{ text: buildMapsPrompt(query.trim()) }] }],
-      };
+      const provider = selectLlmProvider(process.env);
+      const body = { contents: [{ role: 'user', parts: [{ text: buildMapsPrompt(query.trim()) }] }] };
 
       const groundedStartedAt = Date.now();
       try {
@@ -434,15 +439,18 @@ async function createApp() {
         });
         return;
       } catch (groundingError) {
-        // Maps quota is exhausted (or unavailable on this provider): answer
-        // without live place data.
+        // Maps quota is exhausted (or unavailable on this provider): answer without live place data.
         const fallback = groundingFallback('maps', groundingError);
         const fallbackStartedAt = Date.now();
+        const degradedModels =
+          provider.kind === 'gemini'
+            ? modelChainStartingWith(GEMINI_MODELS.degraded)
+            : provider.mapsModels;
         const data = await withModelFallback(
-          provider.mapsModels,
+          degradedModels,
           (model) => provider.generate(model, body),
-          DEGRADED_MODEL_TIMEOUT_MS,
           MODEL_TIMEOUT_MS,
+          DEGRADED_MODEL_TIMEOUT_MS,
           'maps'
         );
         console.log(

@@ -25,22 +25,24 @@ const DEFAULT_NUM_RESULTS = 5;
 const MAX_NUM_RESULTS = 10;
 // Exa is a backup source, so it must never hold an answer hostage.
 const EXA_TIMEOUT_MS = 6000;
+const EXA_AUTH_COOLDOWN_MS = 10 * 60_000;
+const invalidExaKeys = new Map<string, number>();
 
 export class ExaTimeoutError extends Error {}
 export class ExaUnconfiguredError extends Error {}
+export class ExaAuthError extends Error {}
 
-// Server-side signal for how often the backup reference links break, so a
-// spike of timeouts or auth failures is visible in the logs. An empty result
-// set is not a broken fallback, so it gets its own wording.
-function logExaFailure(
+// Server-side signal for how often the backup reference links break, without
+// treating optional backup degradation as an application error.
+function logExaInfo(
   query: string,
-  reason: 'timeout' | 'not_configured' | 'empty' | 'failed',
+  reason: 'timeout' | 'not_configured' | 'auth' | 'empty' | 'failed',
   error: unknown
 ): void {
   const message = error instanceof Error ? error.message : String(error);
   const headline =
     reason === 'empty' ? 'no backup sources found' : 'fallback sources unavailable';
-  console.warn(
+  console.log(
     `[exa] ${headline} reason=${reason} query="${query.slice(0, 80)}" message=${message}`
   );
 }
@@ -54,11 +56,16 @@ function getExaApiKey(override?: string): string | undefined {
   const key = (
     override ?? (typeof process !== 'undefined' ? process.env.EXA_API_KEY : undefined)
   )?.trim();
-  return key ? key : undefined;
+  if (!key || key === 'MY_EXA_API_KEY') return undefined;
+  return key;
 }
 
 export function isExaConfigured(apiKey?: string): boolean {
-  return Boolean(getExaApiKey(apiKey));
+  const key = getExaApiKey(apiKey);
+  if (!key) return false;
+  const blockedUntil = invalidExaKeys.get(key);
+  if (blockedUntil && Date.now() < blockedUntil) return false;
+  return true;
 }
 
 export async function searchWeb(
@@ -129,6 +136,13 @@ export async function searchWeb(
       typeof data.error === 'string'
         ? data.error
         : data.error?.message || `Exa API error ${response.status}`;
+    if (response.status === 401 || response.status === 403) {
+      if (invalidExaKeys.size > 16) invalidExaKeys.clear();
+      invalidExaKeys.set(apiKey, Date.now() + EXA_AUTH_COOLDOWN_MS);
+      throw new ExaAuthError(
+        'EXA_API_KEY ไม่ถูกต้องหรือหมดอายุ กรุณาตรวจสอบค่าใน Settings > Secrets'
+      );
+    }
     throw new Error(`ไม่สามารถค้นหาเว็บด้วย Exa ได้: ${detail}`);
   }
 
@@ -158,11 +172,14 @@ export async function searchWebSources(
   apiKey?: string,
   numResults: number = DEFAULT_NUM_RESULTS
 ): Promise<ExaSource[]> {
+  if (!isExaConfigured(apiKey)) {
+    return [];
+  }
   try {
     const { results } = await searchWeb(query, numResults, apiKey, EXA_FALLBACK_OBJECTIVE);
     if (results.length === 0) {
       // Exa answered fine, it just had nothing to cite: not a failure.
-      logExaFailure(query, 'empty', new Error('Exa returned no results'));
+      logExaInfo(query, 'empty', new Error('Exa returned no results'));
     }
     return results.map((item) => ({ title: item.title, uri: item.url }));
   } catch (error) {
@@ -171,8 +188,10 @@ export async function searchWebSources(
         ? 'timeout'
         : error instanceof ExaUnconfiguredError
           ? 'not_configured'
-          : 'failed';
-    logExaFailure(query, reason, error);
+          : error instanceof ExaAuthError
+            ? 'auth'
+            : 'failed';
+    logExaInfo(query, reason, error);
     return [];
   }
 }
